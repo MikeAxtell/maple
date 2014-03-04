@@ -1,0 +1,387 @@
+LICENSE
+    EAPMA.pl
+
+    Copyright (C) 2014 Michael J. Axtell
+
+    This program is free software: you can redistribute it and/or modify it
+    under the terms of the GNU General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    This program is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+    Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with this program. If not, see <http://www.gnu.org/licenses/>.
+
+SYNOPSIS
+    Empirical assessment of plant MIRNA annotations, based upon expression
+    and predicted precursor secondary structure.
+
+CITATION
+    As yet unpublished.
+
+VERSION
+    dev3 : Unreleased development version. March 4, 2014
+
+AUTHOR
+    Michael J. Axtell, Penn State University, mja18@psu.edu
+
+DEPENDENCIES
+        perl
+        samtools
+        RNALfold
+
+    Perl is required to be at /usr/bin/perl in order to compile EAPMA.
+
+    samtools <http://samtools.sourceforge.net/> needs to be installed in
+    your PATH. EAPMA was developed using samtools 0.1.19.
+
+    RNALfold is from the ViennaRNA package. See
+    <http://www.tbi.univie.ac.at/~ronny/RNA/vrna2.html>. RNALfold must in
+    your PATH. EAPMA was developed using version 2.1.3
+
+INSTALL
+    There is no real installation. Install samtools and RNALfold to your
+    PATH. For convenience, EAPMA.pl can also be installed to your PATH.
+
+USAGE
+    EAPMA.pl [options] [alignments.bam] [genome.fasta] [chr:start-stop]
+
+    Output goes to STDOUT
+
+OPTIONS
+    --help : Print a help message and quit
+
+    --version: Print the version number and quit
+
+    --strand: Limit analysis to the indicated strand ("+" or "-"). If not
+    specified, both strands will be analyzed
+
+    --mature: User-provided annotated or hypothesized mature miRNA sequence.
+    Can be upper or lower case, U's or T's
+
+ALIGNMENTS
+    Alignments must be provided in the BAM format, and must be sorted by
+    coordinate. There are several other requirements as well (see below). It
+    is strongly reccommended to use the following alignment protocol (using
+    BWA):
+
+    1. Trim raw reads to remove 3' adapters, and, if desired, to retain high
+    quality reads. This can be done with any number of publicly available
+    tools, or simple scripts of your own devising. Retain reads in FASTQ or
+    FASTA format. Do not 'condense' the reads by unique sequence .. each
+    FASTA/Q entry should represent one read 'off the sequencer'.
+
+    2. To use bwa, first the genome FASTA file needs to be indexed:
+
+    bwa index genome.fasta
+
+    3. Align the trimmed FASTA/Q data using a bwa and samtools pipeline in
+    conjunction with the indexed genome from step 2 , as shown below:
+
+    bwa aln -n 0 -o 0 -t 6 genome.fasta trimmed.fastq/a > aln.sai
+
+    The above call allows zero mismatches (-n 0), and 0 gaps (-o 0), and
+    requests 6 processor cores (-t 6). Adjust -t as needed for you machine.
+
+    bwa samse -n 1 genome.fasta aln.sai trimmed.fastq/a | samtools view -S
+    -b -u - | samtools sort - aln
+
+    The bwa samse call produces SAM-formatted alignments, reporting only 1
+    alignment per read (-n 1). The output is processed by samtools to sort
+    it by chromsomal position and produce a BAM formatted alignment file,
+    which will be named "aln.bam" in this example.
+
+    4. Index the bam file
+
+    samtools index aln.bam
+
+  BAM file format requirements
+    If you follow the reccommended alignment protocol above, your file will
+    be properly formatted. But, just in case, the detailed format
+    requirements for BAM alignments are as follows:
+
+    1. The file must end with the extension ".bam"
+
+    2. The file must have a header.
+
+    3. The BAM file must be sorted by 'coordinate', as indicated by the SO:
+    tag in the header.
+
+    4. SQ lines must be present in the header, and they must all match names
+    found in the genome.fasta file.
+
+    5. The alignment lines must have either X0:i: or XX:i: tags set. These
+    are optional fields in the SAM format that indicate the number of
+    equally valid alignment positions for the read. X0 tags are created by
+    the bwa alignment method outlined above. XX tags are created by some
+    versions of ShortStack.pl.
+
+    6. The BAM file should be indexed using samtools index. If it is not,
+    EAPMA.pl will attempt to index it.
+
+    Finally, while not a formal requirement (only because there isn't an
+    easy way to check), EAPMA assumes that each read is only present once in
+    the alignment file. For multi-mapping reads, it is assumed that just one
+    possible alignment was selected at random. The bwa method above
+    accomplishes this.
+
+PROCEDURES
+    After receiving a valid command, EAPMA does the following:
+
+  de novo and user-based analyses
+    All queries trigger a de novo analysis, which identifies the most
+    abundant aligned RNA within the structure, and analyzes the structure
+    under the hypothesis that this is the mature miRNA. In the case of a tie
+    (more than one read with the max value), the mature miRNA is arbitrarily
+    chosen. If the user specified a sequence with the option --mature, the
+    user-based analysis is also performed, under the hypothesis that the
+    user-specified sequence is the mature miRNA.
+
+  Structure Identification
+    The query sequence is analyzed with RNALfold. The predicted structure
+    with the lowest predicted free energy is retained and used for further
+    analysis. Only small RNA reads falling entirely within this structure
+    are considered. Note that the identified structure is often smaller than
+    the input query. If no structure at all can be recovered from the query,
+    the locus is scored 0, and failed, and no further analysis is performed.
+
+  Small RNA alignment retrieval
+    All alignments within the identified structure are retrieved. This is
+    strand-specific, and only those alignments whose starts and stops are
+    both within the structure are retrieved. If no alignments are found, the
+    locus is scored 0, and failed, and no further analysis is performed.
+
+  Analysis
+    Analysis of expression and structural features commences provided a
+    structure is found and there are alignments present. Details in SCORING
+    below.
+
+SCORING
+    EAPMA uses a system based on both expression and structural criteria to
+    score each query. The final score is equally divided between
+    expression-based metrics and structure-based metrics, each of which
+    account for 50% of the overall score. There are six expression-based
+    metrics and five structure-based metrics, as detailed below. Each metric
+    is given a score between 0 and 1 (with 0 being very poor and 1 being
+    excellent). The six expression-based metrics are each weighted to 8.33%
+    when calculating the overall score; the five expression-based metrics
+    are each weighted to 10% each. The overall score thus also varies
+    between 0 (poor) and 1 (excellent). In addition to the score, each locus
+    is given a "PASS" or "FAIL" decision on whether the evidence supports
+    annotation of the locus as a MIRNA.
+
+  Expression-based scoring
+    MULTI-MAPPED_CORRECTED_READ_TOTAL
+    This is the number of alignments after correcting for multi-mapping
+    reads.
+
+    Scoring matrix:
+
+    Corrected_Reads Score
+
+    0-4 0
+
+    5-9 0.25
+
+    10-49 0.5
+
+    50-99 0.75
+
+    >=100 1
+
+    UNIQUELY_MAPPED_READS
+    This is the number of alignments for reads that were uniquely mapped to
+    the locus.
+
+    Scoring matrix:
+
+    Unique_Reads Score
+
+    0 0
+
+    >=1 1
+
+    STAR_READS
+    This is the number of alignments for the miRNA-star sequence.
+
+    Scoring matrix:
+
+    Star_reads Score
+
+    0 0 **causes decision of FAIL
+
+    1-5 0.5
+
+    >=6 1
+
+    miRNA_READS
+    This is the number of alignments for the mature miRNA sequence
+
+    Scoring matrix
+
+    miRNA_reads Score
+
+    0-4 0 ** causes decision of FAIL
+
+    5-9 0.25
+
+    10-49 0.5
+
+    50-99 0.75
+
+    >=100 1
+
+    PRECISION
+    This is the number of miRNA + miRNA-star alignments divided by all
+    alignments
+
+    Scoring matrix: Used directly. ** <0.25 causes decision of FAIL
+
+    MIR_GTEQ_STAR
+    Whether or not the number of alignments for the hypothesized mature
+    miRNA is greater than or equal to that of the hypothesized miRNA-star.
+
+    Scoring matrix
+
+    Answer Score
+
+    Yes 1
+
+    No 0 ** causes decision of FAIL
+
+  Structure-based scoring
+    MIR_ARM
+    What arm of the stem is the hypothesized mature miRNA located on. For
+    sequences that have predicted self-pairing, no arm can be determined
+    (which causes a decision of FAIL).
+
+    Scoring matrix
+
+    Answer Score
+
+    5p 1
+
+    3p 1
+
+    x 0 ** causes decision of FAIL
+
+    MIR_UNPAIRED
+    The number of nucleotides in the hypothesized mature miRNA that are
+    unpaired.
+
+    Scoring matrix
+
+    n_unpaired Score
+
+    0-3 1
+
+    4 0.5
+
+    5 0.25
+
+    >=6 0 ** causes decision of FAIL
+
+    STAR_COMPUTABLE
+    Whether or not the position of the hypothesized mature miRNA-star could
+    be computed. Non-computable miRNA-stars indicate a highly aberrant
+    stem-loop.
+
+    Scoring matrix
+
+    Answer Score
+
+    Yes 1
+
+    No 0 ** causes decision of FAIL
+
+    N_BULGES_DUPLEX
+    The number of assymetric nucleotides in the hypothesized
+    miRNA/miRNA-star duplex. This is calculated as the number of bulged
+    nucleotides plus the number of 'excess' nucleotides in assymmetric
+    internal loops. For instance, in an assymetric internal loop with 3 on
+    one side and 2 on the other, 1 nt is in 'excess'.
+
+    Scoring matrix
+
+    n_assym Score
+
+    0-1 1
+
+    2 0.5
+
+    3 0.25
+
+    >=4 0 ** causes decision of FAIL
+
+    MAX_STEM_BUFFER
+    The maximum length of the stem flanking the hypothesized
+    miRNA/miRNA-star duplex. This will either come from the loop-proximal or
+    base-proximal side of the putative duplex. This is based on experimental
+    and computational data indicating that plant MIRNA processing requires a
+    spacing of about 15-17nts either from the base or the loop for the DCL
+    enzyme to make the first 'cut'.
+
+    Scoring matrix
+
+    max_buffer Score
+
+    >=15 1
+
+    13-14 0.25
+
+    <=12 0
+
+ALIGNMENTS
+    The text-based alignments show the sequence of the best structure and
+    the predicted secondary structure in RNALfold dot-bracket notation. Each
+    line under that represents a distinct read sequence. Note that the read
+    sequences are pulled from the reference genome, not the reads
+    themselves. In cases where read alignment allowed mismatches, this
+    caveat becomes meaningful.
+
+    All read lines have two values at the end. "l" represents the length of
+    the read in nts, and "a" represents the number of alignments for that
+    read.
+
+    "Special" read lines are those that correspond to the de-novo found
+    candidate mature miRNA ("dn_miRNA"), the computed star of the de-novo
+    found candidate mature miRNA ("dn_star"), the user-supplied candidate
+    mature miRNA ("u_miRNA"), and the computed star of the user-defined
+    candidate mature miRNA ("u_star"). Special lines use "*" characters for
+    spacing if the read was expressed, and "x" characters if no reads were
+    expressed. Also, in the cases where no reads were expressed, "a=0" will
+    be present to indicate no alignments were present.
+
+NOTES
+  Scoring vs. the Verdict
+    The scores of EAPMA are not directly linked to the "PASS" / "FAIL"
+    decisions. A locus can score very highly, but get a verdict of FAIL
+    becuase it fell short in one key feature. Conversely, a locus could
+    score lowly, but receive a verdict of PASS if it 'fails to fail' any of
+    the key criteria. For loci that PASS, the scores do however give some
+    metric of confidence.
+
+  Limited judgements
+    Both the score and the verdict are conditional on both the hairpin
+    structure and the expression level in the specific small RNA-seq library
+    being examined. Therefore, it is important to note that a low score
+    and/or a verdict of FAIL does not necessarily mean that a locus is not a
+    MIRNA. For instance, it could be that the locus is lowly expressed in
+    the library being considered. For more robust "blacklisting" and
+    "whitelisting" of MIRNA annotations, loci should be queried in multiple
+    libraries.
+
+  Adding flanking sequences
+    When using EAPMA to analyze existing MIRNA locus annotations from
+    miRBase, it is a good idea to add some extra flanking sequence to the
+    queries. Many miRBase hairpin entries are rather minimal, and don't
+    include the full extent of the structured regions at the bases of the
+    hairpins. Entering just these too-short queries could cause otherwise
+    acceptable loci to fail because of insufficient buffer. Therefore I
+    suggest padding all miRBase hairpin queries by 50nts on both sides to
+    make sure the entire structured region is captured.
+
