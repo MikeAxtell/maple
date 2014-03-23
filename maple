@@ -2,12 +2,13 @@
 use strict;
 use Getopt::Long;
 
-my $version_num = "dev3"; 
+my $version_num = "dev4"; 
 # Development begun Dec 13, 2013 MJA .. dev2 begun Jan 6, 2014
 # dev 3 on March 4, 2014
+# dev4 on March 22, 2014 .. changed name to maple
 
-my $usage = "EAPMA.pl version $version_num
-Usage: EAPMA.pl [options] [alignments.bam] [genome.fasta] [chr:start-stop]
+my $usage = "maple version $version_num
+Usage: maple [options] [alignments.bam] [genome.fasta] [chr:start-stop]
 
 Dependencies: 
 samtools
@@ -19,7 +20,7 @@ Options:
 --help : print this message and quit
 --version : print version and quit
 
-Documentation: perldoc EAPMA.pl
+Documentation: perldoc maple
 ";
 
 # If no arguments, print help and quit
@@ -42,7 +43,7 @@ GetOptions ('strand=s' => \$strand,
 
 # If version or help, act accordingly
 if($version) {
-    print "EAPMA.pl version $version_num\n";
+    print "maple version $version_num\n";
     exit;
 }
 if($help) {
@@ -154,7 +155,7 @@ unless($strand eq "+") {
 }
 
 # Initial information for user
-print "\nEAPMA.pl version $version_num\n";
+print "\nmaple version $version_num\n";
 print "Date: ";
 print `date`;
 print "Hostname: ";
@@ -507,6 +508,14 @@ sub master {
 		    }
 		}
 	    }
+	    
+	    ## make a plot HERE HERE
+	    my @sr = split ("\t", $struc_results);
+	    (open(PLOT, "| RNAplot")) || die "Failed to open RNAplot\n";
+	    print PLOT "$mod_seq\n$sr[0]\n";
+	    close PLOT;
+	    
+	    
 	} else {
 	    ## no reads found.
 	    $scores[1] = 0;
@@ -1690,9 +1699,17 @@ sub validate_bam {
 
 __END__
 
+=head1 WARNING 
+
+NOT yet a stable release .. in development.
+
+=head1 SYNOPSIS
+
+maple: MicroRNA Analysis Program Leveraging Expression
+
 =head1 LICENSE
 
-EAPMA.pl
+maple
 
 Copyright (C) 2014 Michael J. Axtell                                                             
                                                                                                  
@@ -1709,17 +1726,9 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License                                
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-=head1 SYNOPSIS
-
-Empirical assessment of plant MIRNA annotations, based upon expression and predicted precursor secondary structure.
-
 =head1 CITATION
 
 As yet unpublished.
-
-=head1 VERSION
-
-dev3 : Unreleased development version. March 4, 2014
 
 =head1 AUTHOR
 
@@ -1731,19 +1740,19 @@ Michael J. Axtell, Penn State University, mja18@psu.edu
     samtools
     RNALfold
 
-Perl is required to be at /usr/bin/perl in order to compile EAPMA.
+Perl is required to be at /usr/bin/perl in order to compile maple.
 
-samtools <http://samtools.sourceforge.net/> needs to be installed in your PATH. EAPMA was developed using samtools 0.1.19.
+samtools <http://samtools.sourceforge.net/> needs to be installed in your PATH. maple was developed using samtools 0.1.19.
 
-RNALfold is from the ViennaRNA package. See <http://www.tbi.univie.ac.at/~ronny/RNA/vrna2.html>. RNALfold must in your PATH. EAPMA was developed using version 2.1.3
+RNALfold is from the ViennaRNA package. See <http://www.tbi.univie.ac.at/~ronny/RNA/vrna2.html>. RNALfold must in your PATH. maple was developed using version 2.1.3
 
 =head1 INSTALL
 
-There is no real installation. Install samtools and RNALfold to your PATH. For convenience, EAPMA.pl can also be installed to your PATH.
+There is no real installation. Install samtools and RNALfold to your PATH. For convenience, maple can also be installed to your PATH.
 
 =head1 USAGE
 
-EAPMA.pl [options] [alignments.bam] [genome.fasta] [chr:start-stop]
+maple [options] [alignments.bam] [genome.fasta] [chr:start-stop]
 
 Output goes to STDOUT
 
@@ -1795,13 +1804,13 @@ If you follow the reccommended alignment protocol above, your file will be prope
 
 5. The alignment lines must have either X0:i: or XX:i: tags set. These are optional fields in the SAM format that indicate the number of equally valid alignment positions for the read. X0 tags are created by the bwa alignment method outlined above. XX tags are created by some versions of ShortStack.pl.
 
-6. The BAM file should be indexed using samtools index. If it is not, EAPMA.pl will attempt to index it.
+6. The BAM file should be indexed using samtools index. If it is not, maple will attempt to index it.
 
-Finally, while not a formal requirement (only because there isn't an easy way to check), EAPMA assumes that each read is only present once in the alignment file. For multi-mapping reads, it is assumed that just one possible alignment was selected at random. The bwa method above accomplishes this.
+Finally, while not a formal requirement (only because there isn't an easy way to check), maple assumes that each read is only present once in the alignment file. For multi-mapping reads, it is assumed that just one possible alignment was selected at random. The bwa method above accomplishes this.
 
 =head1 PROCEDURES
 
-After receiving a valid command, EAPMA does the following:
+After receiving a valid command, maple does the following:
 
 =head2 de novo and user-based analyses
 
@@ -1821,7 +1830,7 @@ Analysis of expression and structural features commences provided a structure is
 
 =head1 SCORING
 
-EAPMA uses a system based on both expression and structural criteria to score each query. The final score is equally divided between expression-based metrics and structure-based metrics, each of which account for 50% of the overall score. There are six expression-based metrics and five structure-based metrics, as detailed below. Each metric is given a score between 0 and 1 (with 0 being very poor and 1 being excellent). The six expression-based metrics are each weighted to 8.33% when calculating the overall score; the five expression-based metrics are each weighted to 10% each. The overall score thus also varies between 0 (poor) and 1 (excellent). In addition to the score, each locus is given a "PASS" or "FAIL" decision on whether the evidence supports annotation of the locus as a MIRNA.
+maple uses a system based on both expression and structural criteria to score each query. The final score is equally divided between expression-based metrics and structure-based metrics, each of which account for 50% of the overall score. There are six expression-based metrics and five structure-based metrics, as detailed below. Each metric is given a score between 0 and 1 (with 0 being very poor and 1 being excellent). The six expression-based metrics are each weighted to 8.33% when calculating the overall score; the five expression-based metrics are each weighted to 10% each. The overall score thus also varies between 0 (poor) and 1 (excellent). In addition to the score, each locus is given a "PASS" or "FAIL" decision on whether the evidence supports annotation of the locus as a MIRNA.
 
 =head2 Expression-based scoring
 
@@ -1991,7 +2000,7 @@ All read lines have two values at the end. "l" represents the length of the read
 
 =head2 Scoring vs. the Verdict
 
-The scores of EAPMA are not directly linked to the "PASS" / "FAIL" decisions.  A locus can score very highly, but get a verdict of FAIL becuase it fell short in one key feature. Conversely, a locus could score lowly, but receive a verdict of PASS if it 'fails to fail' any of the key criteria.  For loci that PASS, the scores do however give some metric of confidence.
+The scores of maple are not directly linked to the "PASS" / "FAIL" decisions.  A locus can score very highly, but get a verdict of FAIL becuase it fell short in one key feature. Conversely, a locus could score lowly, but receive a verdict of PASS if it 'fails to fail' any of the key criteria.  For loci that PASS, the scores do however give some metric of confidence.
 
 =head2 Limited judgements
 
@@ -1999,6 +2008,6 @@ Both the score and the verdict are conditional on both the hairpin structure and
 
 =head2 Adding flanking sequences
 
-When using EAPMA to analyze existing MIRNA locus annotations from miRBase, it is a good idea to add some extra flanking sequence to the queries. Many miRBase hairpin entries are rather minimal, and don't include the full extent of the structured regions at the bases of the hairpins. Entering just these too-short queries could cause otherwise acceptable loci to fail because of insufficient buffer. Therefore I suggest padding all miRBase hairpin queries by 50nts on both sides to make sure the entire structured region is captured.
+When using maple to analyze existing MIRNA locus annotations from miRBase, it is a good idea to add some extra flanking sequence to the queries. Many miRBase hairpin entries are rather minimal, and don't include the full extent of the structured regions at the bases of the hairpins. Entering just these too-short queries could cause otherwise acceptable loci to fail because of insufficient buffer. Therefore I suggest padding all miRBase hairpin queries by 50nts on both sides to make sure the entire structured region is captured.
 
 =cut

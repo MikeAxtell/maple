@@ -1,5 +1,11 @@
+WARNING
+    NOT yet a stable release .. in development.
+
+SYNOPSIS
+    maple: MicroRNA Analysis Program Leveraging Expression
+
 LICENSE
-    EAPMA.pl
+    maple
 
     Copyright (C) 2014 Michael J. Axtell
 
@@ -16,15 +22,8 @@ LICENSE
     You should have received a copy of the GNU General Public License along
     with this program. If not, see <http://www.gnu.org/licenses/>.
 
-SYNOPSIS
-    Empirical assessment of plant MIRNA annotations, based upon expression
-    and predicted precursor secondary structure.
-
 CITATION
     As yet unpublished.
-
-VERSION
-    dev3 : Unreleased development version. March 4, 2014
 
 AUTHOR
     Michael J. Axtell, Penn State University, mja18@psu.edu
@@ -34,21 +33,21 @@ DEPENDENCIES
         samtools
         RNALfold
 
-    Perl is required to be at /usr/bin/perl in order to compile EAPMA.
+    Perl is required to be at /usr/bin/perl in order to compile maple.
 
     samtools <http://samtools.sourceforge.net/> needs to be installed in
-    your PATH. EAPMA was developed using samtools 0.1.19.
+    your PATH. maple was developed using samtools 0.1.19.
 
     RNALfold is from the ViennaRNA package. See
     <http://www.tbi.univie.ac.at/~ronny/RNA/vrna2.html>. RNALfold must in
-    your PATH. EAPMA was developed using version 2.1.3
+    your PATH. maple was developed using version 2.1.3
 
 INSTALL
     There is no real installation. Install samtools and RNALfold to your
-    PATH. For convenience, EAPMA.pl can also be installed to your PATH.
+    PATH. For convenience, maple can also be installed to your PATH.
 
 USAGE
-    EAPMA.pl [options] [alignments.bam] [genome.fasta] [chr:start-stop]
+    maple [options] [alignments.bam] [genome.fasta] [chr:start-stop]
 
     Output goes to STDOUT
 
@@ -121,16 +120,16 @@ ALIGNMENTS
     versions of ShortStack.pl.
 
     6. The BAM file should be indexed using samtools index. If it is not,
-    EAPMA.pl will attempt to index it.
+    maple will attempt to index it.
 
     Finally, while not a formal requirement (only because there isn't an
-    easy way to check), EAPMA assumes that each read is only present once in
+    easy way to check), maple assumes that each read is only present once in
     the alignment file. For multi-mapping reads, it is assumed that just one
     possible alignment was selected at random. The bwa method above
     accomplishes this.
 
 PROCEDURES
-    After receiving a valid command, EAPMA does the following:
+    After receiving a valid command, maple does the following:
 
   de novo and user-based analyses
     All queries trigger a de novo analysis, which identifies the most
@@ -161,7 +160,7 @@ PROCEDURES
     below.
 
 SCORING
-    EAPMA uses a system based on both expression and structural criteria to
+    maple uses a system based on both expression and structural criteria to
     score each query. The final score is equally divided between
     expression-based metrics and structure-based metrics, each of which
     account for 50% of the overall score. There are six expression-based
@@ -358,7 +357,7 @@ ALIGNMENTS
 
 NOTES
   Scoring vs. the Verdict
-    The scores of EAPMA are not directly linked to the "PASS" / "FAIL"
+    The scores of maple are not directly linked to the "PASS" / "FAIL"
     decisions. A locus can score very highly, but get a verdict of FAIL
     becuase it fell short in one key feature. Conversely, a locus could
     score lowly, but receive a verdict of PASS if it 'fails to fail' any of
@@ -376,7 +375,7 @@ NOTES
     libraries.
 
   Adding flanking sequences
-    When using EAPMA to analyze existing MIRNA locus annotations from
+    When using maple to analyze existing MIRNA locus annotations from
     miRBase, it is a good idea to add some extra flanking sequence to the
     queries. Many miRBase hairpin entries are rather minimal, and don't
     include the full extent of the structured regions at the bases of the
