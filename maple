@@ -2,21 +2,27 @@
 use strict;
 use Getopt::Long;
 
-my $version_num = "dev4"; 
-# Development begun Dec 13, 2013 MJA .. dev2 begun Jan 6, 2014
-# dev 3 on March 4, 2014
-# dev4 on March 22, 2014 .. changed name to maple
+my $version_num = "0.1alpha"; 
+
+# Begin tracking information for postscript output legend
+my $ps_info = $version_num;
 
 my $usage = "maple version $version_num
-Usage: maple [options] [alignments.bam] [genome.fasta] [chr:start-stop]
+Usage: maple [options] [butter_alignment.bam] [genome.fasta] [chr:start-stop] [strand 'plus' or 'minus']
 
 Dependencies: 
 samtools
-RNALfold
+RNAfold
+RNAplot
 
 Options:
---strand : limit analysis to indicated strand \(+ or -\) of genome
---mature : annotated/hypothesized mature miRNA sequence
+
+--locus_name [string] : name of locus [optional .. if not given, defaults to UserLocus]
+--mature [string] : annotated/hypothesized mature miRNA sequence [optional]
+--mature_name [string] : name of mature query [optional .. if --mature is given, but --mature_name is not, defaults to UserMature]
+--show_duplexes [string] : What types of miR/miR* duplexes to show details for. 'all', 'pass', or 'none'. Default: 'pass' 
+--miRType [string] : Kingdom from which your putative MIRNA locus hails. 'animal' or 'plant'. Defaults to 'plant'
+--no_ps : Suppress creation of post-script image file
 --help : print this message and quit
 --version : print version and quit
 
@@ -29,16 +35,24 @@ unless($ARGV[0]) {
     exit;
 }
 
-# Initiialize options
-my $strand = "b";
+# Initialize options
 my $mature = '';
 my $help = '';
 my $version = '';
+my $mature_name = 'UserMature';
+my $show_duplexes = 'pass';
+my $no_ps;
+my $locus_name = 'UserLocus';
+my $miRType = 'plant';
 
 # Get ye options
-GetOptions ('strand=s' => \$strand,
-	    'mature=s' => \$mature,
+GetOptions ('mature=s' => \$mature,
+	    'mature_name=s' => \$mature_name,
 	    'help' => \$help,
+	    'show_duplexes=s' => \$show_duplexes,
+	    'no_ps' => \$no_ps,
+	    'locus_name=s' => \$locus_name,
+	    'miRType=s' => \$miRType,
 	    'version' => \$version);
 
 # If version or help, act accordingly
@@ -60,18 +74,35 @@ unless ($samcheck =~ /samtools$/) {
     die "\nAbort: samtools installation not found. Please install samtools to your PATH and try again\n";
 }
 
-# Check for required RNALfold installation
-(open(RNALCHECK, "which RNALfold |")) || die "\nAbort: Failed to check for RNALfold installation\n";
-my $rnalcheck = <RNALCHECK>;
-chomp $rnalcheck;
-close RNALCHECK;
-unless( $rnalcheck =~ /RNALfold$/) {
-    die "\nAbort: RNALfold installation not found. Please install RNALfold to your PATH and try again\n";
+# Check for required RNAfold installation
+(open(RNACHECK, "which RNAfold |")) || die "\nAbort: Failed to check for RNAfold installation\n";
+my $rnacheck = <RNACHECK>;
+chomp $rnacheck;
+close RNACHECK;
+unless( $rnacheck =~ /RNAfold$/) {
+    die "\nAbort: RNAfold installation not found. Please install RNAfold to your PATH and try again\n";
 }
 
+# Check for required RNAplot installation
+(open(RNACHECK, "which RNAplot |")) || die "\nAbort: Failed to check for RNAplot installation\n";
+$rnacheck = <RNACHECK>;
+chomp $rnacheck;
+close RNACHECK;
+unless( $rnacheck =~ /RNAplot$/) {
+    die "\nAbort: RNAplot installation not found. Please install RNAplot to your PATH and try again\n";
+}
+
+
 # Validate option --strand
-unless(($strand eq "b") or ($strand eq "+") or ($strand eq "-")) {
-    die "\nAbort: Option --strand is invalid. Must be either +, -, or b.\n";
+my $cl_strand = $ARGV[-1];
+unless(($cl_strand eq "plus") or ($cl_strand eq "minus")) {
+    die "\nAbort: Strand is invalid. Must be either \'plus\', or \'minus\'.\n";
+}
+my $strand;
+if($cl_strand eq "plus") {
+    $strand = "+";
+} else {
+    $strand = "-";
 }
 
 # Validate option --mature
@@ -87,13 +118,25 @@ if($mature) {
     }
 }
 
+# Validate option --show_duplexes
+unless(($show_duplexes eq "all") or 
+       ($show_duplexes eq "pass") or
+       ($show_duplexes eq "none")) {
+    die "Invalid value for option --show_duplexes. Must be all, pass, or none\n";
+}
+
+# Validate option --miRType
+unless(($miRType eq "plant") or ($miRType eq "animal")) {
+    die "Invalid value for option --miRType. Must be \'animal\' or \'plant\'\n";
+}
+
 # Validate genome and get faidx
 my $genomefile;
-if($ARGV[-2]) {
-    if(-r $ARGV[-2]) {
-	$genomefile = $ARGV[-2];
+if($ARGV[-3]) {
+    if(-r $ARGV[-3]) {
+	$genomefile = $ARGV[-3];
     } else {
-	die "Genome file $ARGV[-2] was not readable. Abort.\n";
+	die "Genome file $ARGV[-3] was not readable. Abort.\n";
     }
 } else {
     die "Genome file was not found in command line. Abort.\n";
@@ -109,32 +152,43 @@ unless(-r $expected_faidx) {
 	exit;
     }
 }
+# strip file path info for use in postscript legend
+my $g_strip = $genomefile;
+$g_strip =~ s/^.*\///g;
+$ps_info .= "\n$g_strip";
+
 
 # Validate bam
 my $bamfile;
 my $bam_check;
-if($ARGV[-3]) {
-    if($ARGV[-3] =~ /\.bam$/) {
-	if(-r $ARGV[-3]) {
-	    $bamfile = $ARGV[-3];
+if($ARGV[-4]) {
+    if($ARGV[-4] =~ /\.bam$/) {
+	if(-r $ARGV[-4]) {
+	    $bamfile = $ARGV[-4];
 	    $bam_check = validate_bam($bamfile,$expected_faidx);
 	    unless($bam_check) {
 		exit;
 	    }
 	} else {
-	    die "Abort: bamfile $ARGV[-3] was not readable\n";
+	    die "Abort: bamfile $ARGV[-4] was not readable\n";
 	}
     } else {
-	die "Abort: bamfile $ARGV[-3] did not end in .bam\n";
+	die "Abort: bamfile $ARGV[-4] did not end in .bam\n";
     }
 } else {
     die "Abort: No bamfile was specified on the command line\n";
 }
+# strip file path info for use in postscript legend
+my $b_strip = $bamfile;
+$b_strip =~ s/^.*\///g;
+$ps_info .= "\n$b_strip";
+
+
 
 # Validate coordinates
 my $co;
-if($ARGV[-1]) {
-    $co = $ARGV[-1];
+if($ARGV[-2]) {
+    $co = $ARGV[-2];
 } else {
     die "Abort: Coordinates not found on the command line\n";
 }
@@ -142,6 +196,9 @@ my $co_check = check_coordinates ($co,$expected_faidx);
 unless($co_check) {
     exit;
 }
+## $ps_info .= "\n$co";  ## need to have the modified, trimmed down location stored, not the user's input, which might end up being trimmed
+$ps_info .= "\n$strand";
+$ps_info .= "\n$locus_name";
 
 # Get the sense strand sequence
 my $sense_seq = get_sense_seq($genomefile,$co);
@@ -162,462 +219,1405 @@ print "Hostname: ";
 print `hostname`;
 print "Working Directory: ";
 print `pwd`;
-print "\nAlignments: $ARGV[-3]\n";
-print "Genome: $ARGV[-2]\n";
-print "Locus: $ARGV[-1]\n";
-print "Strand: ";
-if($strand eq "b") {
-    print "Both\n";
-} else {
-    print "$strand\n";
-}
+print "\nAlignments: $ARGV[-4]\n";
+print "Genome: $ARGV[-3]\n";
+print "Locus: $ARGV[-2]\n";
+print "Strand: $strand\n";
+print "miRType: $miRType\n";
+print "Locus Name: $locus_name\n";
 print "User-supplied mature miRNA: ";
 if($mature) {
     print "$mature\n";
 } else {
     print "Not provided\n";
 }
+if($mature) {
+    print "Mature Name: $mature_name\n";
+}
+print "Show duplexes: $show_duplexes\n";
+print "\n";
 
-# sense first
-unless($strand eq "-") {
-    print "\n\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\n\nPLUS STRAND ANALYSIS\n\n";
-    master($sense_seq,$bamfile,$mature_ok,$co,"+");
+if($strand eq "+") {
+    master($sense_seq,$bamfile,$mature_ok,$co,"+",$mature_name,$show_duplexes,$ps_info,$miRType);
+} elsif($strand eq "-") {
+    master($revcomp_seq,$bamfile,$mature_ok,$co,"-",$mature_name,$show_duplexes,$ps_info,$miRType);
 }
-# revcomp second
-unless($strand eq "+") {
-    print "\n\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\#\n\nMINUS STRAND ANALYSIS\n\n";
-    master($revcomp_seq,$bamfile,$mature_ok,$co,"-");
-}
-    
+
 ################
 
 sub master {
-    my($seq,$bamfile,$mature,$query,$strand) = @_;
-
-    my @scores = ();
+    my($seq,$bamfile,$mature,$query,$strand,$name,$show_duplexes,$ps_info,$miRType) = @_;
     
-    my @m_scores = ();
+    ## Step one, get a structure
+    my $struc_results_alpha = get_struc($seq);
+    ## $struc_results is either 0 for no struc found, or tab-delimited brax, trimmed seq, and local start (one-based)
     
-    my $x; 
-
-    my $user_mir;
-    my $most_abun;
+    ## Check if the structure is overall totally bogus. miRType affects this
+    my $struc_results = check_struc($struc_results_alpha,$miRType);
     
-    # Obtain the lowest free energy structure per RNALfold
-    my $struc_results = get_struc($seq);
-    ## $struc_results is either 0 for no struc found, or tab-delimited brax, dg, local start
-    
-    my $mod_seq;
-    
-    my %read_hash = ();
-    my $ma_star;
-    my $user_star;
-    
+    # only proceed if a structure of some sort was returned
     if($struc_results) {
-	$scores[0] = 1;
-	# TEST
-	#print STDERR "\$struc_results is $struc_results\n";
-    
 	# Parse the coordinates of the structure
 	my $mod_query = get_mod_query($struc_results,$query,$strand);
-	# TEST
-	#print STDERR "\$mod_query is $mod_query\n";
+	$ps_info .= "\n$mod_query";
 	
-	# Report the location of the structure
-	print "BEST STRUCTURE: $mod_query $strand\n\n";
 	
-	# Get a corresponding trimmed version of the sequence
-	$mod_seq = get_mod_seq($query,$mod_query,$seq,$strand);
-	# TEST
-	#print STDERR "\$mod_seq is $mod_seq\n";
-	
-	# Get info for all reads that are fully aligned in the query region on designated strand
+        # Get info for all reads that are fully aligned in the query region on designated strand
 	my @sam = get_sam($bamfile,$mod_query,$strand);
 	
-	## If no reads at all, do not proceed.
+        ## If no reads at all, do not proceed.
 	if($sam[0]) {
-	    $scores[1] = 1;
-	    # TEST
-	    #print STDERR "\$sam[0] is $sam[0]\n";
-	    #print STDERR "\$sam[-1] is $sam[-1]\n";
 	    
+            # Compress into hash.  Keys are 1-based starts, relative to mod_query _ length_medianXX_consensusXY_medianXZ, values are frequencies
+	    my %read_hash = get_read_hash(\@sam,\$mod_query,\$strand);
 	    
-	    # Get the rep-norm total abundance, and the number of uniquely aligned reads to the locus
-	    my($rep_norm,$uniques) = check_rep_counts(@sam);
-	    $scores[2] = sprintf("%.1f",$rep_norm);
-	    $scores[3] = $uniques;
-	    # TEST
-	    #print STDERR "\$scores[2] is $scores[2]\n";
-	    #print STDERR "\$scores[3] is $scores[3]\n";
+            # Get a depth hash .. keys are one-based positions, values are total depths
+	    my %depth_hash = get_depth_hash(\%read_hash);
 	    
-	    # Compress into hash.  Keys are 1-based starts, relative to mod_query _ length, values are frequencies
-	    %read_hash = get_read_hash(\@sam,\$mod_query,\$strand);
-	    # TEST
-	    #print STDERR "\%read_hash\n";
-	    #my $tt;
-	    #my $uu;
-	    #while (($tt,$uu) = each %read_hash) {
-		#print STDERR "\t$tt\t$uu\n";
+	    # Rearrange data into all possible miR/miR* duplexes
+	    my %duplex_hash = get_duplex_hash(\%read_hash,\$struc_results);  # keys: relativestart_length_medianXX_consensusXY_medianXZ_freq, values: same, except for star
+
+	    # test
+	    #print "duplex_hash:\n";
+	    #while((my $rrr, my $sss) = each %duplex_hash) {
+		#print "key: $rrr value: $sss\n";
 	    #}
+	    #exit;
 	    
-	    # Print size distribution of alignments for the user
+	    
+	    
+	    # Gather score components that can be pre-analyzed and are universal
+	    # e1: total alignments .. 0-4 is 0, 5-9 is 0.25, 10-49 is 0.5, 50-99 is 0.75, >= 100 is 1 .. NO Fatals
+	    my($all_reads,$uniques) = check_rep_counts(@sam);
+	    my $e1;
+	    if($all_reads < 5) {
+		$e1 = 0;
+	    } elsif ($all_reads < 10) {
+		$e1 = 0.25;
+	    } elsif ($all_reads < 50) {
+		$e1 = 0.5;
+	    } elsif ($all_reads < 100) {
+		$e1 = 0.75;
+	    } else {
+		$e1 = 1;
+	    }
+	    
+	    # e2: uniquely mapped reads .. 0 for 0, 1 for 1 or more .. NO Fatals
+	    my $e2;
+	    if($uniques) {
+		$e2 = 1;
+	    } else {
+		$e2 = 0;
+	    }
+	    
+	    # Score each component that is specific to given miR/miR* components.
+	    # First, sort .. will end up sorted 5'-3' relative to the putative miRNA locations
+	    my @dh_k_sort = sort (keys %duplex_hash);
+	    
+	    my %provisional = ();  ## a subset of duplex_hash where the partners are valid, except for the pending overall precision check
+	    my %failed = ();  ## the other subset of duplex_hash
+	    foreach my $mir (@dh_k_sort) {
+		my $star = $duplex_hash{$mir};
+		my $sd = score_duplex($mir,$star,$struc_results);  ## e3, e4, e5, s1, s2, s3, s4, s5, arm, verdict ... tab-delimited
+		# glom on the locus-wide ones
+		$sd = "$e1\t$e2\t" . "$sd";
+		# glom on the star info
+		$sd = "$star\t" . "$sd";
+		
+		# add to the appropriate hash
+		if($sd =~ /PASS/) {
+		    $provisional{$mir} = $sd;
+		    ## test
+		    #print "Added $mir $sd to provisional\n";
+		} else {
+		    $failed{$mir} = $sd;
+		    ## test
+		    #print "Added $mir $sd to failed\n";
+		}
+		
+	    }
+	    
+	    my %isomirs = get_isomirs(\%provisional,\%failed);  ## really, isomirs and isomir*'s
+
+	    
+	    # Calculate the diversity of the locus .. distinct alignment positions / total number of alignments.
+	    my $diversity = get_diversity(\%read_hash);
+	    # test
+	    #print "\tDiversity: $diversity\n";
+	    
+	    # Now, simulate the diversity expected under a null model of random processing positions, given the locus length, alignment depth, and sizes of reads...
+	    my($sim_div_mean, $sim_div_stdev) = simulate_random_diversity(\%read_hash,\$mod_query);
+	    
+	    # Simulate diversity expected under an idealized model of a single miRNA and miRNA* only, at ratio of 90% to 10%.
+	    my($sim_div_ideal_mean, $sim_div_ideal_stdev) = simulate_ideal_diversity(\@sam);
+	    
+	    # test
+	    #print "\tSimulated random diversity: mean: $sim_div_mean stdev $sim_div_stdev\n";
+	    #print "\tSimulated ideal diversity: mean: $sim_div_ideal_mean stdev $sim_div_ideal_stdev\n";
+	    
+	    # score diversity.
+	    my $e6 = score_diversity ($sim_div_mean,$sim_div_stdev,$sim_div_ideal_mean,$sim_div_ideal_stdev,$diversity);
+	    
+	    
+	    final_scoring(\%provisional,\%failed,\$e6); ## modifies the hashes such that keys are offset_length_freq of mirs, values are tab-delimited first entry offset_length_freq of the star, final score, and pass/fail string
+	    
+	    # report 
+	    print "Best Structure at Location $mod_query strand $strand\n";
+	    my @sr = split ("\t", $struc_results);
+
+	    # check on user-provided sequence
+	    my $mature_prefix = "NULL";
+	    if($mature) {
+		$mature_prefix = get_mature_prefix($mature,$sr[1]);
+		if($mature_prefix eq "NULL") {
+		    print "\n\*\*\* WARNING: User-provided mature sequence of $mature did not match in structure location $mod_query strand $strand \*\*\*\n";
+		}
+	    }
+
+	    print "\n$sr[1]\n$sr[0]\n";
+	    # print out all reads in standard cloud format, numbering, and showing basic information (number, and size)
+	    my %alt_read_hash = print_read_cloud(\%read_hash,\$sr[1],\$mature_prefix,\$name);  ### $sr[1] is the printed sequence
+	    
+	    # print simple summary of aligned reads by RNA size
+	    print "\nAlignment summary by RNA size:\n";
 	    print_align_summary(\%read_hash);
 	    
-	    # If mature is included, get its position(s), as the 1-based start position _ length
-	    my @mature_match = ();
-	    if($mature) {
-		@mature_match = check_mature_match($mature,$mod_seq);
-		if($mature_match[0]) {
-		    $scores[4] = scalar @mature_match;
-		    ## TEST
-		    #print STDERR "\@mature_match is @mature_match\n";
-		    
-		} else {
-		    $scores[4] = 0;
-		}
-	    } else {
-		$scores[4] = -1;
-	    }
+	    # report on all duplexes, in order of score
 	    
-	    #############
-	    # de novo analysis, indpendent of @mature_match
-	    # Simply analyzes the most abundant read
+	    # test
+	    #print "provision hash:\n";
+	    #while((my $xxx, my $yyy) = each %provisional) {
+		#print "key: $xxx value: $yyy\n";
+	    #}
+	    #exit;
 	    
-	    # Find the most abundant position
-	    $most_abun = get_most_abun(%read_hash);
-	    # TEST
-	    #print STDERR "\$most_abun is $most_abun\n";
-	    
-	    # Get the brackets
-	    my $ma_brac = get_brax_subset($most_abun,$struc_results);
-	    # TEST
-	    #print STDERR "\$ma_brac is $ma_brac\n";
-	    
-	    # Pairing of ma_brac .. determine arm.  0 is loop-spanning or no pairs, 1 is 5p arm, 2 is 3p arm
-	    $scores[5] = score_brac_pairing($ma_brac);
-	    # TEST
-	    #print STDERR "\$scores[5] is $scores[5]\n";
-	    
-	    # To proceed to try and find star, there must be six or fewer unpaired nts in the mature, not counting the 3'-most 2 nts (overhangs in miR/miR* duplex)
-	    $scores[6] = count_duplex_unpairs($ma_brac);
-	    # TEST
-	    #print STDERR "\$scores[6] is $scores[6]\n";
-	    
-	    # Get the star, if the ma_brac is kosher .. $scores[5] is not zero, and $scores[6] is <= 6
-	    # $ma_star;  ## left-most_length, like $most_abun
-	    if(($scores[5]) and ($scores[6] <= 6)) {
-		$ma_star = get_star($most_abun,$struc_results,$scores[5]);
-		# TEST
-		#print STDERR "\$ma_star is $ma_star\n";
-	    }
-	    
-	    # $scores[7] simply indicates whether or not the star was able to be computationally deduced
-	    if($ma_star) {
-		$scores[7] = 1;
-	    } else {
-		$scores[7] = 0;
-	    }
-	    # TEST
-	    #print STDERR "\$scores[7] is $scores[7]\n";
-	    
-	    # analyze the miR/miR* duplex to find the total number of assym nts.
-	    my $assym = -1;
+	    # test
+	    #print "Failed hash\n";
+	    #while((my $xxx, my $yyy) = each %failed) {
+		#print "key: $xxx value: $yyy\n";
+	    #}
+	    #print "Isomir hash\n";
+	    #while ((my $ooo, my $ppp) = each %isomirs) {
+		#print "key: $ooo value: $ppp\n";
+	    #}
+	    #exit;
 
-	    if($ma_star) {
-		$assym = check_duplex_struc($most_abun,$ma_star,$struc_results,$scores[5]);
+	    
+	    report_duplexes(\%provisional,\%failed,\%alt_read_hash,\@sr,\%isomirs,\$mature_prefix,\$name,\$show_duplexes,\$ps_info);
+	    
+	    # print locus precision
+	    print "Observed diversity: $diversity\n";
+	    print "Expected diversity under random model: ";
+	    # round off this information for display
+	    my $round_ran = sprintf("%.3f", $sim_div_mean);
+	    my $round_stdev = sprintf("%.3f", $sim_div_stdev);
+	    print "$round_ran +\/- $round_stdev\n";
+	    my $round_ideal = sprintf("%.3f", $sim_div_ideal_mean);
+	    my $round_istdev = sprintf("%.3f", $sim_div_ideal_stdev);
+	    print "Expected diversity under idealized MIRNA model: $round_ideal +\/- $round_istdev\n";
+	    
+	    # create post-script file, highlighting per-nt alignment density
+	    unless($no_ps) {
+		(open(TEMP, ">temp.txt")) || die "Failure in writing postscript file\n";
+		print TEMP "$sr[1]\n$sr[0]\n";
+		close TEMP;
+		system "RNAplot < temp.txt";
+		system "rm -f temp.txt";
+		# test
+		#print "ps_info is\n$ps_info\n";
+		#exit;
+
+		my $ps_file = annotate_ps(\%depth_hash,\$ps_info);
+		system "rm -f rna.ps";
+		print "\nAnnotated post-script file: $ps_file\n";
 	    }
-	    $scores[8] = $assym;
-
-	    # TEST
-	    #print STDERR "\$scores[8] is $scores[8] assym\n";
-	    
-	    # Identify the boundaries of the stem in which the miR/miR* duplex exists.
-	    my $stem_pos;
-	    my $max_buffer;
-	    my $star_exp = 0;
-	    if($ma_star) {
-		$stem_pos = get_stem_pos($most_abun,$ma_star,$struc_results,$scores[5]);
-		# in the format 5pstart-5pstop,3pstart-3pstop
-		# TEST
-		#print STDERR "\$stem_pos is $stem_pos\n";
-		
-		# Determine max buffer. Based on our knowledge of plant MIR processing, we need ~ 15nts of structure on at least one of the two sides of the miR/miR* duplex
-		$max_buffer = get_max_buffer($most_abun,$ma_star,$stem_pos,$scores[5]);
-		# TEST
-		#print STDERR "\$max_buffer is $max_buffer\n";
-		
-		# Get freq of star 
-		if(exists($read_hash{$ma_star})) {
-		    $star_exp = $read_hash{$ma_star};
-		}
-		$scores[9] = $max_buffer;
-	    } else {
-		$scores[9] = -1;
-	    }
-	    
-	    $scores[10] = $star_exp;
-	    $scores[11] = $read_hash{$most_abun}; ## you know it will be defined as it is the most abundant read,
-
-            # Get total expression level of most_abun and its star
-	    $scores[12] = $scores[11] + $star_exp;
-	    
-	    # Get precision
-	    my $total_reads = scalar @sam;
-	    $scores[13] = sprintf("%.3f",($scores[12] / $total_reads));
-	    
-	    # TEST
-	    #print STDERR "\$scores[9] is $scores[9]\n";
-	    #print STDERR "\$scores[10] is $scores[10]\n";
-	    #print STDERR "\$scores[11] is $scores[11]\n";
-	    #print STDERR "\$scores[12] is $scores[12]\n";
-	    #print STDERR "\$scores[13] is $scores[13]\n";
-	    
-	    # Score if miR exists (in de novo, of course it does, but need this to be consistent with the user-supplied route
-	    $scores[14] = 1;
-	    # Score if miR is >= abundance of star. Again, for de novo, of course it is, but need to do this to be consistent with user-supplied route
-	    $scores[15] = 1;
-	    
-	    
-	    ################### user-supplied mature, if applicable
-	    if($scores[4] > 0) {
-		# recall that scores[4] is the number of times that the user-supplied mature sequence occurs within $mod_seq.
-		# If there are multiple matches, quietly select one to analyze -- most alignments, or if tie, arbitrary.
-		if($scores[4] > 1) {
-		    $user_mir = select_user_mir(\@mature_match,\%read_hash);
-		} else {
-		    $user_mir = $mature_match[0];
-		}
-		# TEST
-		#print STDERR "\$user_mir is $user_mir\n";
-		
-		# If the $user_mir is the same as $most_abun, then no need to re-analyze.
-		if ($user_mir eq $most_abun) {
-		    @m_scores = @scores;
-		    if($ma_star) {
-			$user_star = $ma_star;
-		    }
-		} else {
-		    # populate shared parts
-		    $m_scores[0] = $scores[0];
-		    $m_scores[1] = $scores[1];
-		    $m_scores[2] = $scores[2];
-		    $m_scores[3] = $scores[3];
-		    $m_scores[4] = $scores[4];
-		    
-		    # Need to re-analyze here .. user_mir is not the most abundant read
-		    # Get the brackets
-		    my $user_brac = get_brax_subset($user_mir,$struc_results);
-		    # TEST
-		    #print STDERR "\$user_brac is $user_brac\n";
-		    
-		    # Pairing of ma_brac .. determine arm.  0 is loop-spanning or no pairs, 1 is 5p arm, 2 is 3p arm
-		    $m_scores[5] = score_brac_pairing($user_brac);
-		    # TEST
-		    #print STDERR "\$m_scores[5] is $m_scores[5]\n";
-		    
-		    # To proceed to try and find star, there must be six or fewer unpaired nts in the mature, not counting the 3'-most 2 nts (overhangs in miR/miR* duplex)
-		    $m_scores[6] = count_duplex_unpairs($user_brac);
-		    # TEST
-		    #print STDERR "\$m_scores[6] is $m_scores[6]\n";
-		    
-		    # Get the star, if the ma_brac is kosher .. $m_scores[5] is not zero, and $m_scores[6] is <= 6
-		    #$user_star;  ## left-most_length, like $most_abun
-		    if(($m_scores[5]) and ($m_scores[6] <= 6)) { 
-			$user_star = get_star($user_mir,$struc_results,$m_scores[5]);
-			# TEST
-			#print STDERR "\$user_star is $user_star\n";
-		    }
-		    
-		    # $m_scores[7] simply indicates whether or not the star was able to be computationally deduced
-		    if($user_star) {
-			$m_scores[7] = 1;
-		    } else {
-			$m_scores[7] = 0;
-		    }
-		    # TEST
-		    #print STDERR "\$m_scores[7] is $m_scores[7]\n";
-		    
-		    # analyze the miR/miR* duplex to find the total number of assym nts.
-		    $assym = -1;
-		    
-		    if($user_star) {
-			$assym = check_duplex_struc($user_mir,$user_star,$struc_results,$m_scores[5]);
-		    }
-		    $m_scores[8] = $assym;
-
-		    # TEST
-		    #print STDERR "\$m_scores[8] is $m_scores[8] assym\n";
-		    
-		    # Identify the boundaries of the stem in which the miR/miR* duplex exists.
-		    $stem_pos = '';
-		    $max_buffer = '';
-		    $star_exp = 0;
-		    if($user_star) {
-			$stem_pos = get_stem_pos($user_mir,$user_star,$struc_results,$m_scores[5]);
-			# in the format 5pstart-5pstop,3pstart-3pstop
-			# TEST
-			#print STDERR "\$stem_pos is $stem_pos\n";
-			
-			# Determine max buffer. Based on our knowledge of plant MIR processing, we need ~ 15nts of structure on at least one of the two sides of the miR/miR* duplex
-			$max_buffer = get_max_buffer($user_mir,$user_star,$stem_pos,$m_scores[5]);
-			# TEST
-			#print STDERR "\$max_buffer is $max_buffer\n";
-			
-			# Get freq of star 
-			if(exists($read_hash{$user_star})) {
-			    $star_exp = $read_hash{$user_star};
-			}
-			$m_scores[9] = $max_buffer;
-		    } else {
-			$m_scores[9] = 0;
-		    }
-		    $m_scores[10] = $star_exp;
-		    
-                    # And oh yeah, is the user_mir even expressed?
-		    if(exists($read_hash{$user_mir})) {
-			$m_scores[11] = $read_hash{$user_mir};
-		    } else {
-			$m_scores[11] = 0;
-		    }
-
-		    $m_scores[12] = $m_scores[11] + $star_exp;
-		    
-		    # Get precision
-		    
-		    $m_scores[13] = sprintf("%.3f",($m_scores[12] / $total_reads));
-		    
-		    # TEST
-		    #print STDERR "\$m_scores[9] is $m_scores[9]\n";
-		    #print STDERR "\$m_scores[10] is $m_scores[10]\n";
-		    #print STDERR "\$m_scores[11] is $m_scores[11]\n";
-		    #print STDERR "\$m_scores[12] is $m_scores[12]\n";
-		    #print STDERR "\$m_scores[13] is $m_scores[13]\n";
-		    
-		    # Was user mir sequenced at all?
-		    if($m_scores[11]) {
-			$m_scores[14] = 1;
-		    } else {
-			$m_scores[14] = 0;
-		    }
-		    
-		    # Is user mir >= abun of user star?
-		    if($m_scores[11] >= $m_scores[10]) {
-			$m_scores[15] = 1;
-		    } else {
-			$m_scores[15] = 0;
-		    }
-		}
-	    }
-	    
-	    ## make a plot HERE HERE
-	    my @sr = split ("\t", $struc_results);
-	    (open(PLOT, "| RNAplot")) || die "Failed to open RNAplot\n";
-	    print PLOT "$mod_seq\n$sr[0]\n";
-	    close PLOT;
-	    
 	    
 	} else {
-	    ## no reads found.
-	    $scores[1] = 0;
+	    # no alignments found
+	    print "\nNo alignments found\!\n";
+	    if($mature) {
+		print "Query $name verdict: FAIL\n";
+		print "Query $name score: 0\n";
+	    }
+	    print "Locus verdict: FAIL\n";
+	    print "Locus score: 0\n";
+	    print "Observed diversity: NA\n";
+	    print "Expected diversity under random model: NA\n";
+	    print "Expected diversity under idealized MIRNA model: NA\n";
 	}
     } else {
-	## no structure at all found
-	$scores[0] = 0;
+	# no valid structure found
+	print "\nNo Valid structure found\!\n";
+	if($mature) {
+	    print "Query $name verdict: FAIL\n";
+	    print "Query $name score: 0\n";
+	}
+	print "Locus verdict: FAIL\n";
+	print "Locus score: 0\n";
+	print "Observed diversity: NA\n";
+	print "Expected diversity under random model: NA\n";
+	print "Expected diversity under idealized MIRNA model: NA\n";
+    }
+}
+
+sub check_struc {
+    my($alpha,$miRType) = @_;
+    unless($alpha) {
+	return 0;
+    }
+    my @alpha_fields = split ("\t", $alpha); ## brax, trimmed seq, local start
+    
+    my $longest_left;
+    my $longest_left_len = 0;
+    my $loop_len;
+    my $max_loop_len = 0;
+    my $temp;
+    
+    $temp = $alpha_fields[0];
+    # find longest helix info
+    while($temp =~ /\([\(\.]+\(/g) {
+	if((length $&) > $longest_left_len) {
+	    $longest_left = $&;
+	    $longest_left_len = length $&;
+	}
+    }
+    my $n_paired = 0;
+    my $frac_paired;
+    my @ll = split ('', $longest_left);
+    foreach my $lll (@ll) {
+	if($lll eq "\(") {
+	    ++$n_paired;
+	}
+    }
+    $frac_paired = $n_paired / $longest_left_len;
+    
+    # find longest loop
+    $temp = $alpha_fields[0];
+    while($temp =~ /\(\.+\)/g) {
+	$loop_len = (length $&) - 2;
+	if($loop_len > $max_loop_len) {
+	    $max_loop_len = $loop_len;
+	}
     }
     
-    ## Compile the de-novo score
-    print "DE NOVO ANALYSIS:\n";    
-    
-    if($scores[0] == 0) {
-	print "\*\*\* SUMMARY\n";
-	print "\tOVERALL_SCORE:0\n";
-	print "\tOVERALL_VERDICT:FAIL:NO_STRUCTURE\n";
-    } elsif ($scores[1] == 0) {
-	print "\*\*\* SUMMARY\n";
-	print "\tOVERALL_SCORE:0\n";
-	print "\tOVERALL_VERDICT:FAIL:NO_ALIGNMENTS\n";
+    # enforce limits
+    # frac paired must be at least 0.67 for all miRTypes
+    if($frac_paired < 0.67) {
+	return 0;
+    } elsif ($n_paired < 15) {  ## all have to have at least 15 paired bases
+	return 0;
     } else {
-	score_it(@scores);
-	# if master, score
-	if($scores[4] > 0) {
-	    print "\nUSER-SUPPLIED MATURE ANALYSIS:\n";
-	    if($user_mir eq $most_abun) {
-		print "\tUser-supplied mature miRNA sequence was IDENTICAL to the de-novo discovered most abundant small RNA\n";
+	if($miRType eq "plant") {
+	    # no more than 150 pairs, and no limit on loop length
+	    if($n_paired > 150) {
+		return 0;
 	    } else {
-		print "\tUser-supplied mature miRNA sequence was DIFFERENT THAN the de-novo discovered most abundant small RNA\n";
+		return $alpha;
 	    }
-	    score_it(@m_scores);
-	}
-	# print sequence and brackets
-	print "\n$mod_seq\n";
-	my $just_brax = $struc_results;
-	$just_brax =~ s/\t.*$//g;
-	print "$just_brax\n";
-
-	# Define the "special" lines, and add the special positions into the read_hash if they are not there
-	my %specials = ();
-	if($most_abun) {
-	    push(@{$specials{$most_abun}}, "dn_miRNA");
-	    unless(exists($read_hash{$most_abun})) {
-		$read_hash{$most_abun} = 0;
-	    }
-	}
-	if($ma_star) {
-	    push(@{$specials{$ma_star}}, "dn_star");
-	    unless(exists($read_hash{$ma_star})) {
-		$read_hash{$ma_star} = 0;
-	    }
-	}
-	if($user_mir) {
-	    push(@{$specials{$user_mir}}, "u_miRNA");
-	    unless(exists($read_hash{$user_mir})) {
-		$read_hash{$user_mir} = 0;
-	    }
-	}
-	if($user_star) {
-	    push(@{$specials{$user_star}}, "u_star");
-	    unless(exists($read_hash{$user_star})) {
-		$read_hash{$user_star} = 0;
-	    }
-	}
-	
-        # sort the lines by left-most positions
-	my @sorted_rhkeys = get_sorted_rh_keys(\%read_hash);
-	
-	
-	# Output line by line
-	my $sequence;
-	my @srhk_fields = ();
-	my $space_char;
-	my $i;
-	foreach my $srhk (@sorted_rhkeys) {
-	    @srhk_fields = split ("_", $srhk);
-	    if(exists($specials{$srhk})) {
-		if($read_hash{$srhk} == 0) {
-		    $space_char = "x";
-		} else {
-		    $space_char = "\*";
-		}
+	} elsif ($miRType eq "animal") {
+	    # no more than 45 pairs, and loop length no more than 15
+	    if(($n_paired > 45) or ($max_loop_len > 15)) {
+		return 0;
 	    } else {
-		$space_char = "\.";
+		return $alpha;
 	    }
-	    for ($i = 1; $i < $srhk_fields[0]; ++$i) {
-		print "$space_char";
-	    }
-	    $sequence = substr($mod_seq,($srhk_fields[0] - 1),$srhk_fields[1]);
-	    print "$sequence";
-	    for ($i = ($srhk_fields[0] + $srhk_fields[1]); $i <= (length $mod_seq); ++$i) {
-		print "$space_char";
-	    }
-	    print " l=$srhk_fields[1] a=$read_hash{$srhk}";
-	    if(exists($specials{$srhk})) {
-		print " @{$specials{$srhk}}\n";
-	    } else {
-		print "\n";
-	    }
+	} else {
+	    return 0;
 	}
     }
 }
+    
+    
+    
+    
+
+sub score_diversity {
+    my($ran_mean,$ran_stdev,$ideal_mean,$ideal_stdev,$observed) = @_;
+    # First, the simulated ideal and the simulated randoms must be far enough away from each other .. specifically,
+    #  mean_ideal + 2stdev ideal must be less than mean_random - 2stdev random.
+    my $ideal_top = (2 * $ideal_stdev) + $ideal_mean;
+    my $ran_bot = $ran_mean - (2 * $ran_stdev);
+    my $e6;
+    if($ideal_top >= $ran_bot) {
+	$e6 = 0;
+    } else {
+	# scale the distance between ideal_mean and ran_mean to 1. closer to ideal_mean is 1, ran_mean is 0
+	# boundary conditions first .. within 2 stdevs of either get an absolute score
+	if($observed <= $ideal_top) {
+	    $e6 = 1;
+	} elsif ($observed >= $ran_bot) {
+	    $e6 = 0;
+	} else {
+	    my $x = $ran_bot - $ideal_top;
+	    my $y = $observed - $ideal_top;
+	    my $z = $y / $x;  ## approaches 0 if very close to ideal, approaches 1 if very close to random
+	    $e6 = 1 - $z;
+	    
+	    # test
+	    #print "x: $x y: $y z: $z e6: $e6\n";
+	}
+    }
+    return $e6;
+}
+	    
+
+sub simulate_ideal_diversity {
+    my($sam) = @_; ## by reference, an array
+    my $depth = scalar @$sam;
+    my @values = ();
+    # do 50 simulations
+    for(my $j = 1; $j <= 50; ++$j) {
+	my $mir = 0;
+	my $star = 0;
+	for(my $i = 1; $i <= $depth; ++$i) {
+	    my $r = rand();
+	    if($r < 0.9) {
+		++$mir;
+	    } else {
+		++$star;
+	    }
+	}
+	my $distinct = 0;
+	if($mir) {
+	    ++$distinct;
+	}
+	if($star) {
+	    ++$distinct;
+	}
+	my $diversity = $distinct / ($mir + $star);
+	push(@values, $diversity);
+    }
+    my $mean = mean(@values);
+    my $stdev = stdev(@values);
+    return($mean,$stdev);
+}
+
+sub simulate_random_diversity {
+    my($read_hash,$locus) = @_;  ## by reference .. hash and scalar
+    # do 50 simulations
+    my @values = ();
+    my $length;
+    # parse the locus length
+    if($$locus =~ /^\S+:(\d+)-(\d+)/) {
+	$length = $2 - $1 + 1;
+    } else {
+	die "FATAL in sub-routine simulat_random_diveristy .. could not compute locus length from locus $$locus\n";
+    }
+    my $diversity;
+    my $key;
+    my $freq;
+    my @fields = ();
+    my $j;
+    my $i;
+    my $start;
+    my $k;
+    my %hits = ();
+    my $distinct;
+    my $total;
+    for(my $j = 1; $j <= 50; ++$j) {
+	%hits = ();
+	$total = 0;
+	while(($key, $freq) = each %$read_hash) {
+	    # test
+	    #print "for key $key freq $freq\n";
+	    @fields = split ("_", $key);
+	    # $fields[1] is the read length
+	    for($i = 1; $i <= $freq; ++$i) {
+		$start = int(rand($length - $fields[1]));
+		$k = "$start" . "_" . "$fields[1]";
+		++$hits{$k};
+		++$total;
+		# test
+		#print "\twrote $k\n";
+	    }
+	}
+	$distinct = scalar (keys %hits);
+	$diversity = $distinct / $total;
+	# test
+	#print "Wrote diveristy $diversity\n";
+	#exit;
+	push(@values,$diversity);
+    }
+    my $mean = mean (@values);
+    my $stdev = stdev (@values);
+    return ($mean,$stdev);
+}
+
+sub mean {
+    my(@values) = @_;
+    my $n = scalar @values;
+    my $sum;
+    foreach my $x (@values) {
+	$sum += $x;
+    }
+    my $mean = $sum / $n;
+    return $mean;
+}
+
+sub stdev {
+    my(@values) = @_;
+    my $mean = mean(@values);
+    my $sum_squares;
+    foreach my $x (@values) {
+	$sum_squares += ($x - $mean) ** 2;
+    }
+    my $stdev = sqrt($sum_squares / (scalar @values));
+    return $stdev;
+}
+
+sub get_mature_prefix {
+    my($mature,$seq) = @_; 
+    my $length = length $mature;
+    my $start;
+    while ($seq =~ /$mature/g) {
+	$start = (pos $seq) - $length + 1;
+    }
+    my $prefix;
+    if($start) {
+	$prefix = "$start" . "_$length";
+    } else {
+	$prefix = "NULL";
+    }
+    return $prefix;
+}
+
+sub report_duplexes {
+    my($passed,$failed,$alt,$sr,$iso,$mature_prefix,$name,$show,$ps_info) = @_;  ## by reference. hash, hash, hash, array, hash, scalar, scalar, scalar, scalar
+    my %by_score = ();
+    my $best_fail_score = 0;
+    my $best_pass_score = 0;
+    my $key;
+    my $value;
+    my $query_verdict = "FAIL";
+    my $query_score = 0;
+    while(($key, $value) = each %$failed) {
+	my @values = split ("\t", $value);
+	my $new_key = "$key" . "\t" . "$value";
+	my $score = $values[1];
+	$by_score{$new_key} = $score;
+	if($score > $best_fail_score) {
+	    $best_fail_score = $score;
+	}
+    }
+    while(($key, $value) = each %$passed) {
+	my @values = split ("\t", $value);
+	my $new_key = "$key" . "\t" . "$value";
+	my $score = $values[1];
+	$by_score{$new_key} = $score;
+	if($score > $best_pass_score) {
+	    $best_pass_score = $score;
+	}
+    }
+    # determine locus score
+    my $locus_score;
+    if($best_pass_score > 0) {
+	$locus_score = $best_pass_score;
+    } else {
+	$locus_score = $best_fail_score;
+    }
+    
+    my $locus_verdict = "FAIL"; ## guilty until proven innocent
+    
+    # sort all entries by score
+    my @sorted = sort {$by_score{$b} <=> $by_score{$a}} (keys %by_score);
+    my $subseq;
+    foreach my $s (@sorted) {
+	my @fields = split ("\t", $s);
+	my @mir_stuff = split ("_", $fields[0]);
+	my @star_stuff = split ("_", $fields[1]);
+
+	my $mir_alt_key = $fields[0];
+	$mir_alt_key =~ s/_[^_]+$//g;
+	my $star_alt_key = $fields[1];
+	$star_alt_key =~ s/_[^_]+$//g;
+	
+	my $mir_not_found;
+	my $star_not_found;
+
+	my $mir_prefix = "$mir_stuff[0]" . "_" . "$mir_stuff[1]";
+	my $star_prefix = "$star_stuff[0]" . "_" . "$star_stuff[1]";
+	
+	if($mir_stuff[-1] == 0) {
+	    $mir_not_found = 1;
+	}
+	if($star_stuff[-1] == 0) {
+	    $star_not_found = 1;
+	}
+	
+	my $print_it;
+	if($$show eq "all") {
+	    $print_it = 1;
+	} elsif (($$show eq "pass") and
+		 ($fields[-1] =~ /PASS/)) {
+	    $print_it = 1;
+	}
+	
+	## which one is 5'-most? .. print that one first
+	if((($star_stuff[0] =~ /^\d+$/) and ($mir_stuff[0] < $star_stuff[0])) or
+	   ($star_stuff[0] eq "NULL")) {
+	    
+	    # print miRNA first
+	    
+	    # seq ids
+	    if($print_it) {
+		print "\nDuplex: ";
+	    }
+	    if($mir_not_found) {
+		if($print_it) {
+		    print "x";
+		}
+	    } else {
+		if($print_it) {
+		    print "seq$$alt{$mir_alt_key}";
+		}
+		if($mir_prefix eq $$mature_prefix) {
+		    if($print_it) {
+			print " \($$name\)";
+		    }
+		    $query_verdict = $fields[-1];
+		    $query_score = $by_score{$s};
+		}
+	    }
+	    if($print_it) {
+		print " \/ ";
+	    }
+	    if($star_not_found) {
+		if($print_it) {
+		    print "x\n";
+		}
+	    } else {
+		if($print_it) {
+		    print "seq$$alt{$star_alt_key}";
+		}
+		if($star_prefix eq $$mature_prefix) {
+		    if($print_it) {
+			print " \($$name\)\n";
+		    }
+		    $query_verdict = $fields[-1];
+		    $query_score = $by_score{$s};
+		} else {
+		    if($print_it) {
+			print "\n";
+		    }
+		}
+	    }
+	    
+	    # print sequences
+	    if($print_it) {
+		print "Sequences: ";
+		if($mir_not_found) {
+		    print "x";
+		} else {
+		    $subseq = substr($$sr[1], ($mir_stuff[0] - 1), $mir_stuff[1]);
+		    print "$subseq";
+		}
+		print " \/ ";
+		if($star_not_found) {
+		    print "x\n";
+		} else {
+		    $subseq = substr($$sr[1], ($star_stuff[0] - 1), $star_stuff[1]);
+		    print "$subseq\n";
+		}
+	    }
+	    
+	    # print the score
+	    if($print_it) {
+		print "Score: $by_score{$s}\n";
+	    }
+
+            # pass or fail yes or no yes or no yes or no
+	    if($print_it) {
+		print "Verdict: $fields[-1]\n";
+	    }
+	    if($fields[-1] =~ /PASS/) {
+		$locus_verdict = "PASS";
+	    }
+	    
+	    # print read lengths
+	    if($print_it) {
+		print "RNA Lengths: ";
+		if($mir_not_found) {
+		    print "x";
+		} else {
+		    print "$mir_stuff[1]";
+		}
+		print " \/ ";
+		if($star_not_found) {
+		    print "x\n";
+		} else {
+		    print "$star_stuff[1]\n";
+		}
+	    }
+	    
+	    # print number of alignments
+	    if($print_it) {
+		print "Alignments: $mir_stuff[-1] \/ $star_stuff[-1]\n";
+	    }
+	    
+	    # print multimap tallies
+	    if($print_it) {
+		print "Median mapping positions \(XX\): ";
+		if($mir_not_found) {
+		    print "x";
+		} else {
+		    print "$mir_stuff[2]";
+		}
+		print " \/ ";
+		if($star_not_found) {
+		    print "x\n";
+		} else {
+		    print "$star_stuff[2]\n";
+		}
+	    }
+	    
+	    # print alignment probabilities
+	    if($print_it) {
+		print "Median placement probabilities \(XZ\): ";
+		if($mir_not_found) {
+		    print "x";
+		} else {
+		    print "$mir_stuff[4]";
+		}
+		print " \/ ";
+		if($star_not_found) {
+		    print "x\n";
+		} else {
+		    print "$star_stuff[4]\n";
+		}
+	    }
+	    
+	    # print isomir status, if a failed duplex
+	    if($print_it) {
+		unless($fields[-1] =~ /PASS/) {
+		    print "Is isomir or isomir\*: ";
+		    if($mir_not_found) {
+			print "x";
+		    } else {
+			if(exists($$iso{$fields[0]})) {
+			    print "YES";
+			} else {
+			    print "NO";
+			}
+		    }
+		    print " \/ ";
+		    if($star_not_found) {
+			print "x\n";
+		    } else {
+			if(exists($$iso{$fields[1]})) {
+			    print "YES\n";
+			} else {
+			    print "NO\n";
+			}
+		    }
+		}
+	    }
+	} else {
+	    # star is at 5'
+	    # seq ids
+	    if($print_it) {
+		print "\nDuplex: ";
+	    }
+	    if($star_not_found) {
+		if($print_it) {
+		    print "x";
+		}
+	    } else {
+		if($print_it) {
+		    print "seq$$alt{$star_alt_key}";
+		}
+		if($star_prefix eq $$mature_prefix) {
+		    if($print_it) {
+			print " \($$name\)";
+		    }
+		    $query_verdict = $fields[-1];
+		    $query_score = $by_score{$s};
+		}
+	    }
+	    if($print_it) {
+		print " \/ ";
+	    }
+	    if($mir_not_found) {
+		if($print_it) {
+		    print "x\n";
+		}
+	    } else {
+		if($print_it) {
+		    print "seq$$alt{$mir_alt_key}";
+		}
+		if($mir_prefix eq $$mature_prefix) {
+		    if($print_it) {
+			print " \($$name\)\n";
+		    }
+		    $query_verdict = $fields[-1];
+		    $query_score = $by_score{$s};
+		} else {
+		    if($print_it) {
+			print "\n";
+		    }
+		}
+	    }
+	    
+	    # print sequences
+	    if($print_it) {
+		print "Sequences: ";
+		if($star_not_found) {
+		    print "x";
+		} else {
+		    $subseq = substr($$sr[1], ($star_stuff[0] - 1), $star_stuff[1]);
+		    print "$subseq";
+		}
+		print " \/ ";
+		if($mir_not_found) {
+		    print "x\n";
+		} else {
+		    $subseq = substr($$sr[1], ($mir_stuff[0] - 1), $mir_stuff[1]);
+		    print "$subseq\n";
+		}
+	    }
+	    
+	    # print the score
+	    if($print_it) {
+		print "Score: $by_score{$s}\n";
+	    }
+
+            # pass or fail yes or no yes or no yes or no
+	    if($print_it) {
+		print "Verdict: $fields[-1]\n";
+	    }
+	    if($fields[-1] =~ /PASS/) {
+		$locus_verdict = "PASS";
+	    }
+	    
+	    # print read lengths
+	    if($print_it) {
+		print "RNA Lengths: ";
+		if($star_not_found) {
+		    print "x";
+		} else {
+		    print "$star_stuff[1]";
+		}
+		print " \/ ";
+		if($mir_not_found) {
+		    print "x\n";
+		} else {
+		    print "$mir_stuff[1]\n";
+		}
+	    }
+	    
+	    # print number of alignments
+	    if($print_it) {
+		print "Alignments: $star_stuff[-1] \/ $mir_stuff[-1]\n";
+	    }
+	    
+	    # print multimap tallies
+	    if($print_it) {
+		print "Median mapping positions \(XX\): ";
+		if($star_not_found) {
+		    print "x";
+		} else {
+		    print "$star_stuff[2]";
+		}
+		print " \/ ";
+		if($mir_not_found) {
+		    print "x\n";
+		} else {
+		    print "$mir_stuff[2]\n";
+		}
+	    }
+	    
+	    # print alignment probabilities
+	    if($print_it) {
+		print "Median placement probabilities \(XZ\): ";
+		if($star_not_found) {
+		    print "x";
+		} else {
+		    print "$star_stuff[4]";
+		}
+		print " \/ ";
+		if($mir_not_found) {
+		    print "x\n";
+		} else {
+		    print "$mir_stuff[4]\n";
+		}
+	    }
+	    
+	    # print isomir status, if a failed duplex
+	    if($print_it) {
+		unless($fields[-1] =~ /PASS/) {
+		    print "Is isomir or isomir\*: ";
+		    if($star_not_found) {
+			print "x";
+		    } else {
+			if(exists($$iso{$fields[1]})) {
+			    print "YES";
+			} else {
+			    print "NO";
+			}
+		    }
+		    print " \/ ";
+		    if($mir_not_found) {
+			print "x\n";
+		    } else {
+			if(exists($$iso{$fields[0]})) {
+			    print "YES\n";
+			} else {
+			    print "NO\n";
+			}
+		    }
+		}
+	    }
+	}
+    }
+    
+    # If appropriate, print query results
+    unless($$mature_prefix eq "NULL") {
+	print "\nQuery $$name verdict: $query_verdict\n";
+	print "Query $$name score: $query_score\n";
+    }
+    
+    # Report Locus-wide results
+    print "\nLocus verdict: $locus_verdict\n";
+    print "Locus score: $locus_score\n";
+    
+    # Add locus-wide results to ps_info
+    $$ps_info .= "\n$locus_verdict";
+    $$ps_info .= "\n$locus_score";
+    
+}
+
+
+sub print_read_cloud {
+    my($read_hash,$seq,$mature_prefix,$name) = @_; ## passed by reference .. hash and scalar, scalar, scalar
+    my $i = 0;
+    # properly sort the reads
+    my %pos_hash = ();
+    while ((my $rhk) = each %$read_hash) {
+	my @rhkf = split ("_", $rhk);
+	$pos_hash{$rhk} = $rhkf[0];
+    }
+    my @sorted = sort {$pos_hash{$a} <=> $pos_hash{$b}} (keys %pos_hash);
+    my %alt_hash = ();
+    my $j;
+    my @key_fields = ();
+    my $subseq;
+    my $n;
+    my $prefix;
+    my $user_query_sequenced;
+    foreach my $key (@sorted) {
+	++$i;
+	$n = $$read_hash{$key};
+	$alt_hash{$key} = $i;
+
+	# test
+	#print "key: $used_key value $i\n";
+	
+	
+	@key_fields = split ("_", $key);
+	for($j = 1; $j < $key_fields[0]; ++$j) {
+	    print ".";
+	}
+	$subseq = substr($$seq,($key_fields[0] - 1),$key_fields[1]);
+	print "$subseq";
+	for($j = ($key_fields[1] + $key_fields[0]); $j <= (length $$seq); ++$j) {
+	    print ".";
+	}
+	print " seq$i";
+	print " l=$key_fields[1]";
+	print " a=$n";
+	
+	$prefix = "$key_fields[0]" . "_" . "$key_fields[1]";
+	if($prefix eq $$mature_prefix) {
+	    print " <<< $$name\n";
+	    $user_query_sequenced = 1;
+	} else {
+	    print "\n";
+	}
+
+    }
+    
+    unless($$mature_prefix eq "NULL") {
+	unless($user_query_sequenced) {
+	    print "\n\*\*\* NOTE: No reads matching user query $$name were aligned to this locus\! \*\*\*\n";
+	}
+    }
+    
+    return %alt_hash;
+}
+
+
+sub final_scoring {
+    my($pro,$fail,$e6) = @_; ## by reference .. hash, hash, scalar
+    # pro: at input: offset_length_freq of mirs, values: tab-delimited score string, with first entry offset_length_freq of the star
+    # fail: at input: offset_length_freq of mirs, values: tab-delimited score string, with first entry offset_length_freq of the star
+    
+    my $key;
+    my $value;
+    my @fields = ();
+    my $pf_string;
+    while(($key,$value) = each %$pro) {
+	@fields = split ("\t", $value);
+	## [0] is the star information
+	## [1]-[5] : e1 through e5
+	## [6]-[10] : s1 through s5
+	## [11] : arm information for mir
+	## [12] : PASS/FAIL string
+	
+	# first, modify the PASS/FAIL string if $$e6 is 0
+	$pf_string = $fields[12];
+	if($$e6 == 0) {
+	    if($pf_string eq "PASS") {
+		$pf_string = "FAIL:DIFFUSE_PROCESSING";
+	    } else {
+		$pf_string .= ",DIFFUSE_PROCESSING";
+	    }
+	}
+	
+	# Calculate the expression score
+	my $score = ((($fields[1] + $fields[2] + $fields[3] + $fields[4] + $fields[5] + $$e6) / 6) +
+		     (($fields[6] + $fields[7] + $fields[8] + $fields[9] + $fields[10]) / 5)) / 2;
+	
+	# round the score
+	my $score_r = sprintf("%.3f",$score);
+	
+	# modify the entry
+	my $entry = "$fields[0]\t$score_r\t$pf_string";
+	$$pro{$key} = $entry;
+	
+	# test
+	#print "K:$key E:$entry\n";
+    }
+    
+    # repeat for the fail hash
+    while(($key,$value) = each %$fail) {
+	@fields = split ("\t", $value);
+	## [0] is the star information
+	## [1]-[5] : e1 through e5
+	## [6]-[10] : s1 through s5
+	## [11] : arm information for mir
+	## [12] : PASS/FAIL string
+	
+	# first, modify the PASS/FAIL string if $$e6 is 0
+	$pf_string = $fields[12];
+	if($$e6 == 0) {
+	    if($pf_string eq "PASS") {
+		$pf_string = "FAIL:DIFFUSE_PROCESSING";
+	    } else {
+		$pf_string .= ",DIFFUSE_PROCESSING";
+	    }
+	}
+	
+	# Calculate the expression score
+	my $score = ((($fields[1] + $fields[2] + $fields[3] + $fields[4] + $fields[5] + $$e6) / 6) +
+		     (($fields[6] + $fields[7] + $fields[8] + $fields[9] + $fields[10]) / 5)) / 2;
+	
+	my $score_r = sprintf("%.3f",$score);
+	
+	# modify the entry
+	my $entry = "$fields[0]\t$score_r\t$pf_string";
+	$$fail{$key} = $entry;
+	# test
+	#print "K:$key E:$entry\n";
+
+    }
+}
+
+sub get_diversity {
+    my($hash) = @_; ## by reference, hash
+    my $distinct = scalar (keys %$hash);
+    my $count = 0;
+    while((my $key, my $value) = each %$hash) {
+	$count += $value;
+    }
+    my $diversity = sprintf("%.3f",($distinct / $count));
+    return $diversity;
+}
+
+sub get_isomirs {
+    my($ok,$notok) = @_;  ## passed by reference, both are hashes
+    my %isomirs = ();
+    my %fives = ();  ## locations of start positions for ok entries
+    my %threes = (); ## locations of stop positions for ok entries
+    my $mir;
+    my $star;
+    while (($mir,$star) = each %$ok) {
+	$star =~ s/\t.*$//g;
+	# test
+	#print "\tworking on mir $mir star $star from hash ok\n";
+	my @mfields = split ("_", $mir);
+	$fives{$mfields[0]} = 1;
+	my $m3 = $mfields[0] + $mfields[1] - 1;
+	$threes{$m3} = 1;
+	
+	unless($star eq "NULL") {
+	    my @sfields = split ("_", $star);
+	    $fives{$sfields[0]} = 1;
+	    my $s3 = $sfields[0] + $sfields[1] - 1;
+	    $threes{$s3} = 1;
+	}
+    }
+
+    while (($mir,$star) = each %$notok) {
+	$star =~ s/\t.*$//g;
+	# test
+	#print "\tworking on mir $mir star $star from hash notok\n";
+	my @mfields = split ("_", $mir);
+	my $m3 = $mfields[0] + $mfields[1] - 1;
+	if(exists($fives{$mfields[0]})) {
+	    $isomirs{$mir} = 1;
+	}
+	if(exists($threes{$m3})) {
+	    $isomirs{$mir} = 1;
+	}
+	
+	unless($star =~ /NULL/) {
+	    my @sfields = split ("_", $star);
+	    my $s3 = $sfields[0] + $sfields[1] - 1;
+	    if(exists($fives{$sfields[0]})) {
+		$isomirs{$star} = 1;
+	    }
+	    if(exists($threes{$s3})) {
+		$isomirs{$star} = 1;
+	    }
+	}
+    }
+    # test
+    #print "\nIsomir hash:\n";
+    #while((my $xxx, my $yyy) = each %isomirs) {
+#	print "KEY:$xxx\tVALUE:$yyy\n";
+    #}
+    #exit;
+    
+    return %isomirs;
+}
+    
+
+
+sub score_duplex {
+    my($mir,$star,$struc_results) = @_;
+    
+    my $verdict;
+
+    # test
+    #print "score_duplex: mir $mir star\n";
+    
+    # Expression-based scores
+
+    # e3: reads of miRNA .. 0-4 is 0, 5-9 is 0.25, 10-49 is 0.5, 50-99 is 0.75, >= 100 is 1 .. 0 is fatal
+    my $e3;
+    my $mir_freq = $mir;
+    $mir_freq =~ s/^.*_//g;
+    if($mir_freq <= 4) {
+	$e3 = 0;
+	## FATAL 
+	if($verdict) {
+	    $verdict .= ",LOW_MATURE_EXPRESSION";
+	} else {
+	    $verdict = "FAIL:LOW_MATURE_EXPRESSION";
+	}
+    } elsif (($mir_freq > 4) and ($mir_freq <= 9)) {
+	$e3 = 0.25;
+    } elsif (($mir_freq > 9) and ($mir_freq <= 49)) {
+	$e3 = 0.5;
+    } elsif (($mir_freq > 49) and ($mir_freq <= 99)) {
+	$e3 = 0.75;
+    } else {
+	$e3 = 1;
+    }
+    # test
+    #print "\tmir_freq: $mir_freq\n";
+    #print "\te3 reads of miRNA $e3\n";
+    
+    
+    # e4: reads of star .. 0 is 0, 1-5 is 0.5, 6 or more is 1. 0 is FATAL
+    my $e4;
+    my $star_freq;
+    if($star eq "NULL") {
+	$star_freq = 0;
+    } else {
+	$star_freq = $star;
+	$star_freq =~ s/^.*_//g;
+    }
+    if($star_freq == 0) {
+	$e4 = 0;
+	# FATAL
+	if($verdict) {
+	    $verdict .= ",NO_STAR_EXPRESSED";
+	} else {
+	    $verdict = "FAIL:NO_STAR_EXPRESSED";
+	}
+    } elsif (($star_freq > 0) and ($star_freq <= 5)) {
+	$e4 = 0.5;
+    } elsif ($star_freq > 5) {
+	$e4 = 1;
+    }
+    # test
+    #print "\tstar_freq $star_freq\n";
+    #print "\te4 reads of star $e4\n";
+
+    # e5 : length of miRNA. score 0 if <20 or >24 (FATAL), 1 if 20, 21, or 22, 0.5 if 23, and 0.25 if 24
+    my $e5;
+    my $mir_length;
+    if($mir =~ /^\d+_(\d+)_/) {
+	$mir_length = $1;
+    } else {
+	$mir_length = 0;
+    }
+    if(($mir_length < 20) or ($mir_length > 24)) {
+	$e5 = 0;
+	# FATAL
+	if($verdict) {
+	    $verdict .= ",BAD_MIR_LENGTH";
+	} else {
+	    $verdict = "FAIL:BAD_MIR_LENGTH";
+	}
+    } elsif (($mir_length ==20) or ($mir_length ==21) or ($mir_length ==22)) {
+	$e5 = 1;
+    } elsif ($mir_length == 23) {
+	$e5 = 0.5;
+    } elsif ($mir_length == 24) {
+	$e5 = 0.25;
+    }
+
+    
+    ## structure-based scoring
+    # s1: self-pairing of mature miRNA
+    my $mir_lookup = $mir;
+    $mir_lookup =~ s/_(\d+)$//g;
+    my $mir_brac = get_brax_subset($mir_lookup,$struc_results);
+    my $arm = score_brac_pairing($mir_brac);
+    my $s1;
+    if($arm >= 1) {
+	$s1 = 1;
+    } else {
+	$s1 = 0;
+    }
+    if($s1 == 0) {
+	## FATAL
+	if($verdict) {
+	    $verdict .= ",MIR_NOT_ON_STEM";
+	} else {
+	    $verdict = "FAIL:MIR_NOT_ON_STEM";
+	}
+    }
+    # test
+    #print "\t mir_lookup: $mir_lookup mir_brac: $mir_brac arm: $arm\n";
+    #print "\t s1 self-pairing of mature miRNA: $s1\n";
+
+    # s2: miR unpaired nts .. 1 for 0-3, 0.5 for 4, 0.25 for 5, 0 for 6 or more. 
+    my $s2;
+    my $mir_up = count_duplex_unpairs($mir_brac);
+    if($mir_up <= 3) {
+	$s2 = 1;
+    } elsif ($mir_up == 4) {
+	$s2 = 0.5;
+    } elsif ($mir_up == 5) {
+	$s2 = 0.25;
+    } else {
+	$s2 = 0;
+	# FATAL
+	if($verdict) {
+	    $verdict .= ",GT6_UP_MIR";
+	} else {
+	    $verdict = "FAIL:GT6_UP_MIR";
+	}
+    }
+    # test
+    #print "\tmir_up: $mir_up\n";
+    #print "\ts2 .. miR unpaired nts $s2\n";
+    
+    # s3: simply whether or not the star was computable .. if its not, FATAL!
+    my $s3;
+    if($star =~ /^NULL/) {
+	$s3 = 0;
+	# FATAL
+	if($verdict) {
+	    $verdict .= ",STAR_NOT_COMPUTABLE";
+	} else {
+	    $verdict = "FAIL:STAR_NOT_COMPUTABLE";
+	}
+    } else {
+	$s3 = 1;
+    }
+    # test
+    #print "\ts3 .. star computable $s3\n";
+    
+    # s4 and s5 are dependent upon star being computable ...
+    #  if s3 is 0, we know verdict is fail. No need to add the s4 and s5 error messages, they won't make sense if no star is computable anyway
+    my $s4;
+    my $s5;
+    if($s3) {
+	# s4: total assymetric nts. in miR/miR* duplex. 0-1 is 1, 2 is 0.5, 3 is 0.25, >= 4 OR non-computed star is 0. 0 is fatal
+	my $assym;
+	my $star_lookup = $star;
+	$star_lookup =~ s/_(\d+)$//g;
+	$assym = check_duplex_struc($mir_lookup,$star_lookup,$struc_results,$arm);
+	if($assym >=4) {
+	    $s4 = 0;
+	    # FATAL
+	    if($verdict) {
+		$verdict .= ",TOO_MANY_BULGES";
+	    } else {
+		$verdict = "FAIL:TOO_MANY_BULGES";
+	    }
+	} elsif ($assym == 3) {
+	    $s4 = 0.25;
+	} elsif ($assym == 2) {
+	    $s4 = 0.5;
+	} else {
+	    $s4 = 1;
+	}
+	# test
+	#print "\tassym: $assym\n";
+	#print "\ts4 total assymetric nts $s4\n";
+	
+	# s5 .. buffer size for plants .. 1 if 15 or more, 0.5 if 13 or 14, 0.25 if 12 or 11, 0.1 if 10, 0 if less than ten OR if no STAR computed. 0 is FATAL
+
+	my $stem_pos = get_stem_pos($mir_lookup,$star_lookup,$struc_results,$arm);
+	my $max_buffer = get_max_buffer($mir_lookup,$star_lookup,$stem_pos,$arm);
+	if($max_buffer < 10) {
+	    $s5 = 0;
+	    # FATAL
+	    if($verdict) {
+		$verdict .= ",INSUFFICIENT_BUFFER";
+	    } else {
+		$verdict = "FAIL:INSUFFICIENT_BUFFER";
+	    }
+	} elsif ($max_buffer == 10) {
+	    $s5 = 0.1;
+	} elsif (($max_buffer == 11) or ($max_buffer == 12)) {
+	    $s5 = 0.25;
+	} elsif (($max_buffer == 13) or ($max_buffer == 14)) {
+	    $s5 = 0.5;
+	} else {
+	    $s5 = 1;
+	}
+	# test
+	#print "\tstem_pos: $stem_pos max_buffer: $max_buffer\n";
+	#print "\ts5 buffer size $s5\n";
+	
+    } else {
+	$s4 = 0;
+	$s5 = 0;
+	# test
+	#print "\ts4 and s5 set to 0\n";
+    }
+    
+    # if nothing has been entered to the verdict, the duplex passed.
+    unless($verdict) {
+	$verdict = "PASS";
+    }
+    
+    # gather the information
+    my $out = "$e3\t$e4\t$e5\t$s1\t$s2\t$s3\t$s4\t$s5\t$arm\t$verdict";
+    # test
+    #print "\t$out\n";
+    return $out;
+}    
+    
+
+sub get_seq {
+    my($query,$struc_results) = @_; 
+    if($query eq "NULL") {
+	return "\*null\*";
+    } else {
+	my @sr = split ("\t", $struc_results);  # [0]: brax, [1]: seq, [2]: local start 
+	my @q = split ("_", $query); # [0]: start (one-based), [1]: length, [2]: frequency
+	my $out = substr($sr[1], ($q[0] - 1), $q[1]);
+	return $out;
+    }
+}
+	
+
+sub get_duplex_hash {
+    my($read_hash,$struc_results) = @_; ## by reference .. hash and string
+    my %out = ();
+    my %partnered = ();
+    my $key;
+    my $freq;
+    my $long_key;
+    my $long_freq;
+
+    my %read_hash_short = ();
+    while(($long_key, $long_freq) = each %$read_hash) {
+	my @lkf = split ("_", $long_key);
+	my $short_key = "$lkf[0]" . "_" . "$lkf[1]";
+	$read_hash_short{$short_key} = $long_key;
+    }
+    
+    # find the partners
+    while (($key,$freq) = each %$read_hash) {
+	# test
+	#print "key: $key freq: $freq\n";
+	if(exists($partnered{$key})) {
+	    # test
+	    #print "\tkey existed in partnered hash\n";
+	    next;
+	}
+	my $brac1 = get_brax_subset($key,$$struc_results);
+	# test
+	#print "\tbrac1: $brac1\n";
+	my $brac1_pairing = score_brac_pairing($brac1);
+	# test
+	#print "\tbrac1_pairing: $brac1_pairing\n";
+	my $brac1_d_up = count_duplex_unpairs($brac1);
+	# test
+	#print "\tbrac1_d_up: $brac1_d_up\n";
+	my $other = '';
+	if(($brac1_pairing) and ($brac1_d_up <= 6)) {
+	    $other = get_star($key,$$struc_results,$brac1_pairing);
+	    # test
+	    #print "\tother: $other\n";
+	}
+	# build new name
+	my $one_name = "$key" . "_$freq";
+	# test
+	#print "\tone_name: $one_name\n";
+	
+	my $two_name;
+	if($other) {
+	    # Get frequency of the other
+	    my $other_freq = 0;
+	    if(exists($read_hash_short{$other})) {
+		$long_key = $read_hash_short{$other};
+		$other_freq = $$read_hash{$long_key};
+		$two_name = "$long_key" . "_$other_freq";
+	    } else {
+		$two_name = "$other" . "_NULL_NULL_NULL_0"; ## fields for the XX, XY, XZ, and frequency filled in here
+		$long_key = "$other" . "_NULL_NULL_NULL";
+	    }
+	    # test
+	    #print "\ttwo_name: $two_name\n";
+	    if($other_freq > $freq) {
+		$out{$two_name} = $one_name;
+		# test
+		#print "\tout: $two_name keyed to $one_name\n";
+	    } else {
+		$out{$one_name} = $two_name;
+		# test
+		#print "\tout: $one_name keyed to $two_name\n";
+	    }
+	    $partnered{$long_key} = 1;
+	    # test
+	    #print "\tadded $long_key to partnered hash\n";
+	} else {
+	    $out{$one_name} = "NULL_NULL_NULL_NULL_NULL_0";
+	    # test
+	    #print "\tout: $one_name keyed to $out{$one_name}";
+	}
+	# test
+	#print "\tadded $key to partnered hash\n";
+	$partnered{$key} = 1;
+    }
+    # test
+    #exit;
+    return %out;
+}
+
+
+
+    
+    
+    
 
 sub get_sorted_rh_keys {
     my($hash) = @_; ## passed by ref
@@ -830,25 +1830,16 @@ sub score_it {
 
 sub check_rep_counts {
     my(@sam) = @_;
-    my $rep_norm = 0;
+    my $all = 0;
     my $uniques = 0;
     my $this_rep;
     foreach my $samline (@sam) {
-	if($samline =~ /\tX0:i:(\d+)/) {
-	    $this_rep = 1 / $1;
-	    $rep_norm += $this_rep;
-	    if($this_rep == 1) {
-		++$uniques;
-	    }
-	} elsif ($samline =~ /\tXX:i:(\d+)/) {
-	    $this_rep = 1 / $1;
-	    $rep_norm += $this_rep;
-	    if($this_rep == 1) {
-		++$uniques;
-	    }
+	++$all;
+	if($samline =~ /\tXY:Z:U/) {
+	    ++$uniques;
 	}
     }
-    return($rep_norm,$uniques);
+    return($all,$uniques);
 }
 	
 
@@ -1288,40 +2279,6 @@ sub get_brax_subset {
     return $brax_subset;
 }
 
-sub get_mod_seq {
-    my($query,$mod_query,$seq,$strand) = @_;
-    my $orig_start;
-    my $orig_stop;
-    if($query =~ /^\S+:(\d+)-(\d+)$/) {
-	$orig_start = $1;
-	$orig_stop = $2;
-    } else {
-	die "Abort: Parse error in sub-routine get_mod_seq\n";
-    }
-    my $mod_start;
-    my $mod_stop;
-    if($mod_query =~ /^\S+:(\d+)-(\d+)$/) {
-	$mod_start = $1;
-	$mod_stop = $2;
-    } else {
-	die "Abort: Parse error 2 in sub-routine get_mod_seq\n";
-    }
-    
-    my $offset;
-    if($strand eq "+") {
-	$offset = $mod_start - $orig_start;
-    } elsif ($strand eq "-") {
-	$offset = $orig_stop - $mod_stop;
-    } else {
-	die "Fatal in sub-routine get_mod_seq failed to parse strand $strand\n";
-    }
-    
-    my $getlen = $mod_stop - $mod_start + 1;
-	    
-    my $trimmed = substr($seq,$offset,$getlen);
-    return $trimmed;
-}
-
 sub get_most_abun {
     my(%reads) = @_;
     my $max_freq = 0;
@@ -1339,8 +2296,10 @@ sub get_most_abun {
 }
 
 sub check_mature_match {
-    my($mature,$seq) = @_;
-    my @mature_match;  
+    my($mature,$sr) = @_;
+    my @mature_match;
+    my @srt = split ("\t", $sr);
+    my $seq = $srt[1];
     my $mat_start;
     my $mat_key;
     my $mat_length = length $mature;
@@ -1372,6 +2331,10 @@ sub get_read_hash {
     my $mod_pos;
     my $key;
     my $read_end;
+    
+    my %hash_XX = ();
+    my %hash_XY = ();
+    my %hash_XZ = ();
     foreach my $sam_line (@$sam) {
 	chomp $sam_line;
 	
@@ -1403,17 +2366,101 @@ sub get_read_hash {
 	#print STDERR "key of $key entered from mod_pos $mod_pos and read_len $read_len\n";
 	
 	++$hash{$key};
+	
+	# parse custom tags
+	if($sam_line =~ /\tXX:i:(\d+)/) {
+	    push(@{$hash_XX{$key}}, $1);
+	}
+	if($sam_line =~ /\tXY:Z:([NURPM])/) {
+	    push(@{$hash_XY{$key}}, $1);
+	}
+	if($sam_line =~ /\tXZ:f:([^\t\n]+)/) {
+	    push(@{$hash_XZ{$key}}, $1);
+	}
     }
-    return %hash;
+    # get consensus on custom tags
+    my %final_hash = ();
+    while(($key) = each %hash) {
+	my $xx_median = get_xx_median(\%hash_XX,\$key);
+	my $xy_consensus = get_xy_consensus(\%hash_XY,\$key);
+	my $xz_median = get_xz_median(\%hash_XZ,\$key);
+	my $count = $hash{$key};
+	$key .= "_$xx_median" . "_$xy_consensus" . "_$xz_median";
+	$final_hash{$key} = $count;
+	# test
+	#print "Key $key value $count in final_hash\n";
+    }
+    # test
+    #exit;
+    
+    return %final_hash;
+}
+
+sub get_xy_consensus {
+    my($hash,$key) = @_; ## by reference .. hash and scalar
+    my @values = @{$$hash{$$key}};
+    my %counts = ();
+    foreach my $val (@values) {
+	++$counts{$val};
+    }
+    my @sorted = sort {$counts{$b} <=> $counts{$a}} keys %counts;
+    my $consensus = $sorted[0];
+    return $consensus;
 }
 	
+sub get_xx_median {
+    my($xx_hash,$key) = @_; ## by reference, a hash, and a scalar
+    my @values = sort {$a <=> $b} (@{$$xx_hash{$$key}});
+    my $med_idx1;
+    my $med_idx2;
+    my $median;
+    unless($values[0]) {
+	return 0;
+    }
+    if ((scalar @values) % 2) {
+	# odd number of entries, so the median is the central value
+	$med_idx1 = int((scalar @values) / 2);
+	$median = $values[$med_idx1];
+	return $median;
+    } else {
+	# even number of entries, so median is the mean of the two middle-most entries
+	$med_idx2 = int((scalar @values) / 2);
+	$med_idx1 = $med_idx2 - 1;
+	# return only integers for XX:i 
+	$median = int(($values[$med_idx1] + $values[$med_idx2]) * 0.5);
+	return $median;
+    }
+}
+sub get_xz_median {
+    my($xz_hash,$key) = @_; ## by reference, a hash, and a scalar
+    my @values = sort {$a <=> $b} (@{$$xz_hash{$$key}});
+    my $med_idx1;
+    my $med_idx2;
+    my $median;
+    unless($values[0]) {
+	return 0;
+    }
+    if ((scalar @values) % 2) {
+	# odd number of entries, so the median is the central value
+	$med_idx1 = int((scalar @values) / 2);
+	$median = sprintf("%.3f",$values[$med_idx1]);
+	return $median;
+    } else {
+	# even number of entries, so median is the mean of the two middle-most entries
+	$med_idx2 = int((scalar @values) / 2);
+	$med_idx1 = $med_idx2 - 1;
+	# round the floats to 3 digits
+	$median = sprintf("%.3f",(($values[$med_idx1] + $values[$med_idx2]) * 0.5));
+	return $median;
+    }
+}
 
 sub get_mod_query {
     my($struc_results,$query,$strand) = @_;
     
     # Parse out struc_results
     my @struc = split ("\t", $struc_results);
-    my $loc_start = $struc[2];
+    my $loc_start = $struc[2];  ## one-based
     my $brax_len = length $struc[0];
     
     # Parse out original query
@@ -1499,49 +2546,124 @@ sub get_sam {
 
 sub get_struc {
     my($seq) = @_;
-    (open(FOLD, "echo $seq | RNALfold -L 1100 |")) || die "Abort: Failed to open RNALfold job in sub-routine get_struc.\n";
-    my $best_dg = 0;
-    my $best_brax;
-    my $best_loc_st;
-    my @fields = ();
-    my $brax;
-    my $start;
-    my $dg;
-    while (<FOLD>) {
-	chomp;
-	# reset each loop
-	$brax = '';
-	$start = '';
-	$dg = '';
-	if($_ =~ /^[^\.\(\)]/) {
-	    ## this is a line that does not have a structure .. most likely the last line of output which just has the input sequence .. ignore it
-	    next;
-	}
-	if($_ =~ /^\S+/) {
-	    $brax = $&;
-	}
-	if($_ =~ /(\d+)\s*$/) {
-	    $start = $1;
-	}
-	if($_ =~ /\(.*(-\d+\.\d+).*\)/) {
-	    $dg = $1;
-	}
-	if(($brax) and ($start) and ($dg)) {
-	    if($dg < $best_dg) {
-		$best_dg = $dg;
-		$best_brax = $brax;
-		$best_loc_st = $start;
-	    }
-	}
-    }
+    (open(FOLD, "echo $seq | RNAfold --noPS |")) || die "Abort: Failed to open RNAfold job in sub-routine get_struc.\n";
+    my $seq_line = <FOLD>;
+    my $brax_line = <FOLD>;
+    
+    # test
+    #print "RNAfold output:\n$seq_line$brax_line";
+    
+    chomp $seq_line;
+    chomp $brax_line;
     close FOLD;
-    my $out;
-    if($best_brax) {
-	$out = "$best_brax\t$best_dg\t$best_loc_st";
-	return $out;
+    my $brax_untrimmed;
+    if($brax_line =~ /^\S+/) {
+	$brax_untrimmed = $&;
     } else {
 	return 0;
     }
+    
+    # test
+    #print "brax_untrimmed: $brax_untrimmed\n";
+    
+    # hash the structure
+    my %lr = get_lr($brax_untrimmed);
+    my %rl = get_rl($brax_untrimmed);
+    
+    my $match1;
+    my $best_match1;
+    my $local_offset1;
+    my $best_local_offset1;
+    my $brax_untrimmed1 = $brax_untrimmed;
+    # find longest unclosed run of (
+    while ($brax_untrimmed1 =~ /\([^\)]+/g) {
+	$match1 = $&;
+	$local_offset1 = (pos $brax_untrimmed1) - (length $match1);
+	# trim trailing ....
+	$match1 =~ s/\.+$//g;
+	if($best_match1) {
+	    if((length $match1) > (length $best_match1)) {
+		$best_match1 = $match1;
+		$best_local_offset1 = $local_offset1;
+	    }
+	} else {
+	    $best_match1 = $match1;
+	    $best_local_offset1 = $local_offset1;
+	}
+	
+	# test
+	#print "match1: $match1\nlocal_offset1:$local_offset1\nbest_match1:$best_match1\nbest_local_offset1:$best_local_offset1\n";
+    }
+    
+    my $match2;
+    my $best_match2;
+    my $local_offset2;
+    my $best_local_offset2;
+    my $brax_untrimmed2 = $brax_untrimmed;
+    # find longest unclosed run of )
+    while ($brax_untrimmed2 =~ /\)[^\(]+/g) {
+	$match2 = $&;
+	$local_offset2 = (pos $brax_untrimmed2) - (length $match2);
+	# trim trailing ....
+	$match2 =~ s/\.+$//g;
+	if($best_match2) {
+	    if((length $match2) > (length $best_match2)) {
+		$best_match2 = $match2;
+		$best_local_offset2 = $local_offset2;
+	    }
+	} else {
+	    $best_match2 = $match2;
+	    $best_local_offset2 = $local_offset2;
+	}
+	# test
+	#print "match2: $match2\nlocal_offset2:$local_offset2\nbest_match2:$best_match2\nbest_local_offset2:$best_local_offset2\n";
+    }
+    
+    # failsafe...
+    unless(($best_match2) and ($best_match1)) {
+	return 0;
+    }
+    
+    # Which one is shorter?
+    my $final_offset; ## zero-based
+    my $final_length;
+    my $final_start; ## one-based
+    my $final_stop; ## one-based
+    if((length $best_match1) < (length $best_match2)) {
+	$final_offset = $best_local_offset1;
+	$final_start = $final_offset + 1;
+	if(exists($lr{$final_start})) {
+	    $final_stop = $lr{$final_start};
+	} else {
+	    die "FATAL in sub-routine get_struc .. failure to find final_start $final_start in hash lr\n";
+	}
+    } else {
+	$final_stop = $best_local_offset2 + (length $best_match2);  ## converts to one-based
+	if(exists($rl{$final_stop})) {
+	    $final_start = $rl{$final_stop};
+	} else {
+	    die "FATAL in sub-routine get_struc .. failure to find final_stop $final_stop in hash rl\n";
+	}
+	$final_offset = $final_start - 1;  ## zero-based
+    }
+    $final_length = $final_stop - $final_start + 1;
+    
+    # trim
+    my $final_brax = substr($brax_untrimmed,$final_offset,$final_length);
+    # get the seq while you are at it
+    my $final_seq = substr($seq_line,$final_offset,$final_length);
+    # output
+    my $output = "$final_brax" . "\t" . "$final_seq" . "\t" . "$final_start";
+    
+    # test
+    #print "IN:\n\t$seq_line\n\t$brax_untrimmed\n";
+    #print "OUT:\n$output\n";
+    #exit;
+    
+    return $output;
+    
+    
+    
 }
     
 
@@ -1672,12 +2794,12 @@ sub validate_bam {
 	}
     }
     
-    # Does it have X0 or XX tags?
-    (open(SAM, "samtools view $bam |")) || die "Abort: Failed to open bamfile to check X0 or XX tags during validation.\n";
+    # Does it have XX, XY, and XZ tags?
+    (open(SAM, "samtools view $bam |")) || die "Abort: Failed to open bamfile during BAM validation.\n";
     my $check = <SAM>;
     close SAM;
-    unless (($check =~ /\tXX:i:(\d+)/) or ($check =~ /\tX0:i:(\d+)/)) {
-	print STDERR "Abort: alignment data appears to lack XX or X0 tags .. one of the two is required. See documentation.\n";
+    unless (($check =~ /\tXX:i:/) and ($check =~ /\tXY:Z:/) and ($check =~ /\tXZ:f:/)) {
+	print STDERR "Abort: alignment data appears to lack required butter-derived custom tags. See documentation.\n";
 	return 0;
     }
     
@@ -1695,6 +2817,252 @@ sub validate_bam {
     }
     
     return 1;
+}
+
+sub annotate_ps {
+    my($depth_hash,$info) = @_; ## Passed by reference: hash, scalar
+
+    # get the legend string
+    my $legend_string = get_ps_legend_string($$info);
+    
+    # name file according to locus_name, which is the inf[4]
+    my @inf = split ("\n", $$info);
+    my $outfile = "$inf[4]" . ".ps";
+    
+    (open(PSIN, "rna.ps")) || return 0;
+    (open(PSOUT, ">$outfile")) || return 0;
+    while (<PSIN>) {
+	## comment out drawoutline and drawpairs commands
+	$_ =~ s/^drawoutline$/\% drawoutline/g;
+	$_ =~ s/^drawpairs$/\% drawpairs/g;
+	
+	## revise bounding box comment to force a full (US) page of 8.5 inches x 11 inches
+	$_ =~ s/^\%\%BoundingBox: \d+ \d+ \d+ \d+/\%\%BoundingBox: 0 0 612 792/g;
+	
+	## print the original
+	print PSOUT "$_";
+	
+	## add legend information at the top
+	if($_ =~ /^\%\%EndComments/) {
+	    print PSOUT "$legend_string\n";
+	}
+        ## add the maplemark function after the init call
+	if($_ =~ /^init$/) {
+	    print PSOUT "\n";
+	    print PSOUT "\% From maple\n";
+	    print PSOUT "\/maplemark \{ \% i r g b maplemark  draw filled circle around base i\n";
+	    print PSOUT "  setrgbcolor\n";
+	    print PSOUT "  newpath 1 sub coor exch get aload pop\n";
+	    print PSOUT "  fsize 2 div 0 360 arc closepath fill stroke\n";
+	    print PSOUT "\} bind def\n";
+	    
+	    # also add function to mark the 5' end
+	    print PSOUT "\/show5 \{ \% i mark 5-prime end at base i\n";
+	    print PSOUT "  newpath 1 sub coor exch get aload pop moveto\n";
+	    print PSOUT "  -5 0 rmoveto\n";
+	    print PSOUT "  -15 10 rlineto\n";
+	    print PSOUT "  -8 0 rmoveto \(5\'\) show stroke\n";
+	    print PSOUT "\} bind def\n";
+	    
+	    # mark 5' end
+	    print PSOUT "1 show5\n";
+
+	    ## add the colored circles
+	    my $pos;
+	    my $freq;
+	    my @rgb = ();
+	    while(($pos,$freq) = each %$depth_hash) {
+		# test
+		#print STDERR "depth hash pos $pos freq $freq\n";
+		@rgb = get_rgb($freq);
+		print PSOUT "$pos $rgb[0] $rgb[1] $rgb[2] maplemark\n";
+	    }
+
+	}
+	
+    }
+    close PSIN;
+    close PSOUT;
+    return $outfile;
+}
+
+sub get_ps_legend_string {
+    my($info) = @_;  ## string delimited by new lines
+    # test
+    #print "Info is $info\n";
+
+    my @inf = split ("\n", $info);
+    my $string = "\% maple legend and information
+0 0 1 setrgbcolor
+72 720 4 0 360 arc closepath fill stroke
+0 0.5 1 setrgbcolor
+72 710 4 0 360 arc closepath fill stroke
+0 1 1 setrgbcolor
+72 700 4 0 360 arc closepath fill stroke
+0.5 1 0.5 setrgbcolor
+72 690 4 0 360 arc closepath fill stroke
+1 1 0 setrgbcolor
+72 680 4 0 360 arc closepath fill stroke
+1 0.5 0 setrgbcolor
+72 670 4 0 360 arc closepath fill stroke
+1 0 0 setrgbcolor
+72 660 4 0 360 arc closepath fill stroke
+1 0 0.5 setrgbcolor
+72 650 4 0 360 arc closepath fill stroke
+1 0 1 setrgbcolor
+72 640 4 0 360 arc closepath fill stroke
+
+0 0 0 setrgbcolor
+\/Helvetica findfont
+8 scalefont
+setfont
+80 718 moveto
+\(10\) show
+\/Helvetica findfont
+4 scalefont
+setfont
+90 722 moveto
+\(0\) show
+
+\/Helvetica findfont
+8 scalefont
+setfont
+80 698 moveto
+\(10\) show
+\/Helvetica findfont
+4 scalefont
+setfont
+90 702 moveto
+\(1\) show
+
+\/Helvetica findfont
+8 scalefont
+setfont
+80 678 moveto
+\(10\) show
+\/Helvetica findfont
+4 scalefont
+setfont
+90 682 moveto
+\(2\) show
+
+\/Helvetica findfont
+8 scalefont
+setfont
+80 658 moveto
+\(10\) show
+\/Helvetica findfont
+4 scalefont
+setfont
+90 662 moveto
+\(3\) show
+
+\/Helvetica findfont
+8 scalefont
+setfont
+80 638 moveto
+\(>=10\) show
+\/Helvetica findfont
+4 scalefont
+setfont
+99 642 moveto
+\(4\) show
+
+\/Helvetica findfont
+8 scalefont
+setfont
+68 730 moveto
+\(Depth of Coverage\) show
+
+\% Information at bottom page.
+\/Helvetica findfont
+8 scalefont setfont
+72 144 moveto
+\(maple version $inf[0]\) show
+
+\/Helvetica findfont
+8 scalefont setfont
+72 134 moveto
+\(Genome: $inf[1]\) show
+
+\/Helvetica findfont
+8 scalefont setfont
+72 124 moveto
+\(Alignments: $inf[2]\) show
+
+\/Helvetica findfont
+8 scalefont setfont
+72 114 moveto
+\(Location: $inf[5] $inf[3]\) show
+
+\/Helvetica findfont
+8 scalefont setfont
+72 104 moveto
+\(Locus Information: $inf[4] Verdict: $inf[6] Score: $inf[7]\) show
+
+";
+    return $string;
+}
+
+
+sub get_rgb {
+    my($freq) = @_;
+    my $logfreq = (log($freq) / log(10));
+    
+    my @rgb = ();
+    
+    # First Red
+    if($logfreq <= 1) {
+	$rgb[0] = 0;
+    } elsif (($logfreq > 1) and ($logfreq < 2)) {
+	$rgb[0] = $logfreq - 1;
+    } elsif ($logfreq >= 2) {
+	$rgb[0] = 1;
+    }
+    $rgb[0] = sprintf("%.2f",$rgb[0]);
+    
+    # Now Green
+    if($logfreq <= 1) {
+	$rgb[1] = $logfreq;
+    } elsif (($logfreq > 1) and ($logfreq < 2)) {
+	$rgb[1] = 1;
+    } elsif (($logfreq >= 2) and ($logfreq <= 3)) {
+	$rgb[1] = 3 - $logfreq;
+    } elsif ($logfreq > 3) {
+	$rgb[1] = 0;
+    }
+    $rgb[1] = sprintf("%.2f",$rgb[1]);
+    
+    # Now Blue
+    if($logfreq <= 1) {
+	$rgb[2] = 1;
+    } elsif (($logfreq > 1) and ($logfreq < 2)) {
+	$rgb[2] = 2 - $logfreq;
+    } elsif (($logfreq >= 2) and ($logfreq <= 3)) {
+	$rgb[2] = 0;
+    } elsif (($logfreq > 3) and ($logfreq < 4)) {
+	$rgb[2] = $logfreq - 3;
+    } elsif ($logfreq >= 4) {
+	$rgb[2] = 1;
+    }
+    $rgb[2] = sprintf("%.2f",$rgb[2]);
+    
+    return @rgb;
+}
+
+sub get_depth_hash {
+    my($read_hash) = @_; ## passed by reference
+    my %dh = ();
+    my @fields = ();
+    my $key;
+    my $freq;
+    while(($key,$freq) = each %$read_hash) {
+	@fields = split ("_", $key);
+	for(my $i = $fields[0]; $i < ($fields[0]+ $fields[1]); ++$i) {
+	    $dh{$i} += $freq;
+	}
+    }
+    return %dh;
 }
 
 __END__
@@ -1738,17 +3106,18 @@ Michael J. Axtell, Penn State University, mja18@psu.edu
 
     perl
     samtools
-    RNALfold
+    RNAfold
+    RNAplot
 
 Perl is required to be at /usr/bin/perl in order to compile maple.
 
 samtools <http://samtools.sourceforge.net/> needs to be installed in your PATH. maple was developed using samtools 0.1.19.
 
-RNALfold is from the ViennaRNA package. See <http://www.tbi.univie.ac.at/~ronny/RNA/vrna2.html>. RNALfold must in your PATH. maple was developed using version 2.1.3
+RNAfold is from the ViennaRNA package. See <http://www.tbi.univie.ac.at/~ronny/RNA/vrna2.html>. RNAfold must in your PATH. maple was developed using version 2.1.3
 
 =head1 INSTALL
 
-There is no real installation. Install samtools and RNALfold to your PATH. For convenience, maple can also be installed to your PATH.
+There is no real installation. Install samtools and RNAfold to your PATH. For convenience, maple can also be installed to your PATH.
 
 =head1 USAGE
 
@@ -1768,31 +3137,11 @@ Output goes to STDOUT
 
 =head1 ALIGNMENTS
 
-Alignments must be provided in the BAM format, and must be sorted by coordinate. There are several other requirements as well (see below). It is strongly reccommended to use the following alignment protocol (using BWA):
-
-1. Trim raw reads to remove 3' adapters, and, if desired, to retain high quality reads. This can be done with any number of publicly available tools, or simple scripts of your own devising. Retain reads in FASTQ or FASTA format. Do not 'condense' the reads by unique sequence .. each FASTA/Q entry should represent one read 'off the sequencer'.
-
-2. To use bwa, first the genome FASTA file needs to be indexed:
-
-bwa index genome.fasta
-
-3. Align the trimmed FASTA/Q data using a bwa and samtools pipeline in conjunction with the indexed genome from step 2 , as shown below:
-
-bwa aln -n 0 -o 0 -t 6 genome.fasta trimmed.fastq/a > aln.sai
-
-The above call allows zero mismatches (-n 0), and 0 gaps (-o 0), and requests 6 processor cores (-t 6). Adjust -t as needed for you machine.
-
-bwa samse -n 1 genome.fasta aln.sai trimmed.fastq/a | samtools view -S -b -u - | samtools sort - aln
-
-The bwa samse call produces SAM-formatted alignments, reporting only 1 alignment per read (-n 1). The output is processed by samtools to sort it by chromsomal position and produce a BAM formatted alignment file, which will be named "aln.bam" in this example.
-
-4. Index the bam file
-
-samtools index aln.bam
+Alignments must be produced with the program 'butter', version 0.2.1 or higher. You should have received a copy of butter along with maple.
 
 =head2 BAM file format requirements
 
-If you follow the reccommended alignment protocol above, your file will be properly formatted. But, just in case, the detailed format requirements for BAM alignments are as follows:
+The detailed BAM file format requirements are listed below. All of these are produced by the program 'butter', version 0.2.1 or higher.
 
 1. The file must end with the extension ".bam"
 
@@ -1802,11 +3151,13 @@ If you follow the reccommended alignment protocol above, your file will be prope
 
 4. SQ lines must be present in the header, and they must all match names found in the genome.fasta file.
 
-5. The alignment lines must have either X0:i: or XX:i: tags set. These are optional fields in the SAM format that indicate the number of equally valid alignment positions for the read. X0 tags are created by the bwa alignment method outlined above. XX tags are created by some versions of ShortStack.pl.
+5. Alignments must have custom tags XX:i, XY:Z, and XZ:f set. These tags are custom tags produced by the butter aligner program.
 
 6. The BAM file should be indexed using samtools index. If it is not, maple will attempt to index it.
 
-Finally, while not a formal requirement (only because there isn't an easy way to check), maple assumes that each read is only present once in the alignment file. For multi-mapping reads, it is assumed that just one possible alignment was selected at random. The bwa method above accomplishes this.
+7. The BAM file must conform to the BAM/SAM format spec. 
+
+Finally, while not a formal requirement (only because there isn't an easy way to check), maple assumes that each read is only present once in the alignment file. For multi-mapping reads, it is assumed that just one possible alignment was selected at random. The program 'butter' accomplishes this.
 
 =head1 PROCEDURES
 
@@ -1818,7 +3169,7 @@ All queries trigger a de novo analysis, which identifies the most abundant align
 
 =head2 Structure Identification
 
-The query sequence is analyzed with RNALfold. The predicted structure with the lowest predicted free energy is retained and used for further analysis. Only small RNA reads falling entirely within this structure are considered. Note that the identified structure is often smaller than the input query. If no structure at all can be recovered from the query, the locus is scored 0, and failed, and no further analysis is performed.
+The query sequence is analyzed with RNAfold. The predicted structure with the lowest predicted free energy is retained and used for further analysis. Only small RNA reads falling entirely within this structure are considered. Note that the identified structure is often smaller than the input query. If no structure at all can be recovered from the query, the locus is scored 0, and failed, and no further analysis is performed.
 
 =head2 Small RNA alignment retrieval
 
@@ -1990,7 +3341,7 @@ max_buffer  Score
 
 =head1 ALIGNMENTS
 
-The text-based alignments show the sequence of the best structure and the predicted secondary structure in RNALfold dot-bracket notation. Each line under that represents a distinct read sequence. Note that the read sequences are pulled from the reference genome, not the reads themselves. In cases where read alignment allowed mismatches, this caveat becomes meaningful. 
+The text-based alignments show the sequence of the best structure and the predicted secondary structure in RNAfold dot-bracket notation. Each line under that represents a distinct read sequence. Note that the read sequences are pulled from the reference genome, not the reads themselves. In cases where read alignment allowed mismatches, this caveat becomes meaningful. 
 
 All read lines have two values at the end. "l" represents the length of the read in nts, and "a" represents the number of alignments for that read.
 
