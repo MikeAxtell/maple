@@ -2041,6 +2041,12 @@ sub get_stem_pos {
     } else {
 	return 0;
     }
+    
+    # final failsafe .. all have to be defined 
+    unless(($start_5) and ($stop_5) and ($start_3) and ($stop_3)) {
+	return 0;
+    }
+    
     my $out = "$start_5" . "-" . "$stop_5" . "," . "$start_3" . "-" . "$stop_3";  
     return $out;
 }
