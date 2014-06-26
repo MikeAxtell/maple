@@ -2087,6 +2087,10 @@ sub check_duplex_struc {
 	$start = $sa[0];
 	$stop = $star_end - 2;
     }
+    # failsafe for rare error
+    unless(($start) and ($stop)) {
+	return 100;
+    }
     for ($i = $start; $i <= $stop; ++$i) {
 	if(exists($lr{$i})) {
 	    if($last_left) {
