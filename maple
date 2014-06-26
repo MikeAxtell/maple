@@ -2,7 +2,7 @@
 use strict;
 use Getopt::Long;
 
-my $version_num = "0.1alpha"; 
+my $version_num = "0.1beta"; 
 
 # Begin tracking information for postscript output legend
 my $ps_info = $version_num;
@@ -413,7 +413,7 @@ sub master {
 		(open(TEMP, ">temp.txt")) || die "Failure in writing postscript file\n";
 		print TEMP "$sr[1]\n$sr[0]\n";
 		close TEMP;
-		system "RNAplot < temp.txt";
+		system "RNAplot 2> /dev/null < temp.txt";
 		system "rm -f temp.txt";
 		# test
 		#print "ps_info is\n$ps_info\n";
@@ -2568,7 +2568,7 @@ sub get_sam {
 
 sub get_struc {
     my($seq) = @_;
-    (open(FOLD, "echo $seq | RNAfold --noPS |")) || die "Abort: Failed to open RNAfold job in sub-routine get_struc.\n";
+    (open(FOLD, "echo $seq | RNAfold --noPS 2> /dev/null |")) || die "Abort: Failed to open RNAfold job in sub-routine get_struc.\n";
     my $seq_line = <FOLD>;
     my $brax_line = <FOLD>;
     
