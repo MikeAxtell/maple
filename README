@@ -1,6 +1,3 @@
-WARNING
-    NOT yet a stable release .. in development.
-
 SYNOPSIS
     maple: MicroRNA Analysis Program Leveraging Expression
 
@@ -77,7 +74,8 @@ OPTIONS
 
 ALIGNMENTS
     Alignments must be produced with the program 'butter', version 0.2.1 or
-    higher. You should have received a copy of butter along with maple.
+    higher. You should have received a copy of butter along with maple. If
+    not, get it at https://github.com/MikeAxtell/butter
 
   BAM file format requirements
     The detailed BAM file format requirements are listed below. All of these
